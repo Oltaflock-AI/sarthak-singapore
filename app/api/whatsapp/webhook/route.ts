@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { buildSystemPrompt, callPriyaRich, openai, extractLeadData, type ExtractedLead } from "@/lib/openai";
+import { normalizePhone } from "@/lib/format";
 
 const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID!;
 const ACCESS_TOKEN = process.env.META_ACCESS_TOKEN!;
@@ -119,10 +120,15 @@ async function handleCrmSideEffects(
 ) {
   // Always upsert lead row — even if extractor returned nothing, we still log the contact.
   const e = extracted ?? ({} as Partial<ExtractedLead>);
+  const leadPhone = normalizePhone(phone);
+  // Look up any prior lead row under either the canonical key or the legacy unprefixed key.
+  const legacyPhone = leadPhone.replace(/^\+/, "");
   const { data: existing } = await supabase
     .from("leads")
     .select("*")
-    .eq("phone", phone)
+    .or(`phone.eq.${leadPhone},phone.eq.${legacyPhone}`)
+    .order("updated_at", { ascending: false })
+    .limit(1)
     .maybeSingle();
 
   const mergedName = e.name ?? existing?.name ?? (name && name !== phone ? name : null);
@@ -140,7 +146,7 @@ async function handleCrmSideEffects(
   // 'converted' and 'lost' remain manual via dashboard
 
   const merged = {
-    phone,
+    phone: leadPhone,
     name: mergedName,
     project: mergedProject,
     buyer_type: mergedBuyerType,
@@ -152,6 +158,11 @@ async function handleCrmSideEffects(
     source: existing?.source ?? "whatsapp",
     status,
   };
+  // If a legacy (unprefixed) row exists for this phone, delete it so the upsert
+  // under the canonical `+E.164` key doesn't create a second row.
+  if (existing?.phone && existing.phone !== leadPhone) {
+    await supabase.from("leads").delete().eq("phone", existing.phone);
+  }
   await supabase.from("leads").upsert(merged, { onConflict: "phone" });
 
   // Book site visit if requested — dedupe so repeat mentions don't create duplicates

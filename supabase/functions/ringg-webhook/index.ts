@@ -400,8 +400,27 @@ Deno.serve(async (req) => {
       status = "qualified";
     }
 
+    // Canonicalize phone to `+E.164` so the same contact across WhatsApp
+    // (digits-only) and Ringg (+E.164) collapses to one lead row.
+    const digits = String(lead_phone).replace(/[^\d]/g, "");
+    const canonicalPhone = digits ? `+${digits}` : lead_phone;
+    const legacyPhone = canonicalPhone.replace(/^\+/, "");
+
+    // If a row exists under the legacy unprefixed key, delete it so the
+    // canonical upsert doesn't create a duplicate.
+    if (legacyPhone && legacyPhone !== canonicalPhone) {
+      const { data: legacyRow } = await supabase
+        .from("leads")
+        .select("id")
+        .eq("phone", legacyPhone)
+        .maybeSingle();
+      if (legacyRow) {
+        await supabase.from("leads").delete().eq("phone", legacyPhone);
+      }
+    }
+
     const leadRow: Record<string, unknown> = {
-      phone: lead_phone,
+      phone: canonicalPhone,
       source: "voice_agent",
       updated_at: new Date().toISOString(),
     };

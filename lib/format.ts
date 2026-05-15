@@ -59,6 +59,15 @@ export function fmtDateShort(ts: string | Date): string {
   });
 }
 
+// Canonicalize a phone for use as a lead identity key.
+// Strategy: keep only digits, then prefix with `+`. So "919589594181",
+// "+91 9589594181", and "+919589594181" all collapse to "+919589594181".
+export function normalizePhone(raw: string | null | undefined): string {
+  if (!raw) return "";
+  const digits = String(raw).replace(/[^\d]/g, "");
+  return digits ? `+${digits}` : "";
+}
+
 export function fmtTime(ts: string | Date): string {
   const d = typeof ts === "string" ? new Date(ts) : ts;
   return d.toLocaleTimeString("en-IN", {

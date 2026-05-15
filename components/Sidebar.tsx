@@ -2,7 +2,8 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useLiveData, bucketByScore } from "@/lib/data";
+import { useMemo } from "react";
+import { useLiveData, bucketByScore, type WaRow } from "@/lib/data";
 
 const ICONS = {
   overview: (
@@ -43,10 +44,25 @@ export function Sidebar() {
   const { calls, waMessages } = useLiveData();
   const { hot } = bucketByScore(calls);
 
+  // Unread = conversations whose latest message is inbound with no outbound reply yet.
+  const waUnread = useMemo(() => {
+    const latest = new Map<string, WaRow>();
+    for (const m of waMessages) {
+      const key = m.from_number ?? m.id;
+      const cur = latest.get(key);
+      if (!cur || new Date(m.created_at) > new Date(cur.created_at)) latest.set(key, m);
+    }
+    let n = 0;
+    for (const m of latest.values()) {
+      if (m.text_in && !m.text_out) n++;
+    }
+    return n;
+  }, [waMessages]);
+
   const links: { href: string; label: string; icon: React.ReactNode; count?: number; pulse?: boolean }[] = [
     { href: "/", label: "Overview", icon: ICONS.overview },
     { href: "/calls", label: "Voice Calls", icon: ICONS.voice, count: calls.length },
-    { href: "/whatsapp", label: "WhatsApp", icon: ICONS.whatsapp, count: waMessages.length },
+    { href: "/whatsapp", label: "WhatsApp", icon: ICONS.whatsapp, count: waUnread > 0 ? waUnread : undefined, pulse: waUnread > 0 },
     { href: "/leads", label: "Leads", icon: ICONS.leads, count: hot.length, pulse: hot.length > 0 },
     { href: "/site-visits", label: "Site Visits", icon: ICONS.visits },
     { href: "/projects", label: "Projects · KB", icon: ICONS.projects },
