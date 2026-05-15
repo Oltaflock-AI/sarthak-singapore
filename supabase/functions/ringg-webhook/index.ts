@@ -61,6 +61,159 @@ function normalizeTranscript(raw: unknown): TranscriptTurn[] {
   return [];
 }
 
+// ── Humanizers for the WhatsApp recap message ─────────────────────────────
+function humanizeWord(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).trim();
+  if (!s || s === "unclear") return null;
+  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function humanizeBudgetMsg(v: unknown): string | null {
+  if (v == null) return null;
+  const s = String(v).toLowerCase().trim();
+  const m = s.match(/^(\d+(?:\.\d+)?)[_\s-]*(lakh|lakhs|cr|crore|crores|k)$/i);
+  if (m) {
+    const n = Number(m[1]);
+    const u = m[2].toLowerCase();
+    if (u.startsWith("lakh")) return `₹${n} Lakh${n === 1 ? "" : "s"}`;
+    if (u.startsWith("cr")) return `₹${n} Crore${n === 1 ? "" : "s"}`;
+    if (u === "k") return `₹${n}K`;
+  }
+  return humanizeWord(v);
+}
+
+// Pull a probable site-visit date/time line from action_items if present.
+function extractSiteVisitWhen(actionItems: unknown): string | null {
+  if (!Array.isArray(actionItems)) return null;
+  for (const item of actionItems) {
+    if (typeof item !== "string") continue;
+    if (/site visit|site-visit|visit/i.test(item)) {
+      // Strip prefix like "Schedule site visit for "
+      const cleaned = item.replace(/^(schedule|book|confirm)[a-z\s-]*site[\s-]*visit[\s-]*(for|on)?\s*/i, "").trim();
+      return cleaned || item;
+    }
+  }
+  return null;
+}
+
+function composeRecap(args: {
+  name: string | null;
+  project: string | null;
+  summary: string | null;
+  clientAnalysis: Record<string, unknown>;
+  platformAnalysis: Record<string, unknown>;
+}): string {
+  const firstName = args.name ? args.name.split(/\s+/)[0] : "there";
+  const greeting = firstName.charAt(0).toUpperCase() + firstName.slice(1);
+
+  const projectName = humanizeWord(args.project ?? args.clientAnalysis.project_interest);
+  const budget = humanizeBudgetMsg(args.clientAnalysis.budget_range);
+  const timeline = humanizeWord(args.clientAnalysis.timeline);
+  const siteVisitBooked = args.clientAnalysis.site_visit_booked === true ||
+    args.platformAnalysis.classification === "site_visit_booked";
+  const visitWhen = extractSiteVisitWhen(args.platformAnalysis.action_items);
+
+  const lines: string[] = [];
+  lines.push(`Hi ${greeting},`);
+  lines.push("");
+  lines.push("Thank you for speaking with our team at Sarthak Singapore! 🙏");
+  lines.push("");
+
+  if (args.summary) {
+    lines.push("Here's a quick recap of what we discussed:");
+    lines.push(args.summary);
+    lines.push("");
+  }
+
+  const bullets: string[] = [];
+  if (projectName) bullets.push(`• *Project:* ${projectName}`);
+  if (budget) bullets.push(`• *Budget:* ${budget}`);
+  if (timeline) bullets.push(`• *Timeline:* ${timeline}`);
+  if (bullets.length > 0) {
+    lines.push("📋 Your requirements:");
+    lines.push(...bullets);
+    lines.push("");
+  }
+
+  if (siteVisitBooked) {
+    lines.push("✅ *Site visit confirmed*");
+    if (visitWhen) lines.push(`📅 ${visitWhen}`);
+    lines.push("We'll send you the exact venue, directions, and a reminder closer to the visit.");
+    lines.push("");
+  }
+
+  lines.push("If anything changes or you have questions, just reply to this message — we're here to help!");
+  lines.push("");
+  lines.push("— Priya, Sarthak Singapore");
+
+  return lines.join("\n");
+}
+
+async function sendWhatsAppRecap(args: {
+  phone: string;
+  name: string | null;
+  project: string | null;
+  summary: string | null;
+  analysis: Record<string, unknown>;
+  clientAnalysis: Record<string, unknown>;
+  platformAnalysis: Record<string, unknown>;
+}): Promise<void> {
+  const PHONE_ID = Deno.env.get("META_PHONE_NUMBER_ID");
+  const TOKEN = Deno.env.get("META_ACCESS_TOKEN");
+  if (!PHONE_ID || !TOKEN) {
+    console.warn("[ringg-webhook] WA recap skipped — META env vars missing");
+    return;
+  }
+
+  const message = composeRecap({
+    name: args.name,
+    project: args.project,
+    summary: args.summary,
+    clientAnalysis: args.clientAnalysis,
+    platformAnalysis: args.platformAnalysis,
+  });
+
+  const toNumber = args.phone.replace(/^\+/, "");
+
+  const resp = await fetch(`https://graph.facebook.com/v25.0/${PHONE_ID}/messages`, {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${TOKEN}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to: toNumber,
+      type: "text",
+      text: { body: message, preview_url: false },
+    }),
+  });
+
+  const respBody = await resp.text();
+  if (!resp.ok) {
+    console.error("[ringg-webhook] WA send failed", resp.status, respBody);
+    return;
+  }
+
+  let waId: string | null = null;
+  try {
+    const parsed = JSON.parse(respBody) as { messages?: Array<{ id?: string }> };
+    waId = parsed?.messages?.[0]?.id ?? null;
+  } catch { /* ignore */ }
+
+  // Log to wa_messages so the conversation history shows the recap
+  await supabase.from("wa_messages").insert({
+    wa_id: waId,
+    from_number: toNumber,
+    name: args.name,
+    text_in: null,
+    text_out: message,
+  });
+
+  console.log("[ringg-webhook] WA recap sent", { to: toNumber, wa_id: waId });
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type",
@@ -263,6 +416,24 @@ Deno.serve(async (req) => {
 
     const { error: leadErr } = await supabase.from("leads").upsert(leadRow, { onConflict: "phone" });
     if (leadErr) console.error("[ringg-webhook] leads upsert error", leadErr, "row=", leadRow);
+  }
+
+  // ── Send WhatsApp recap after final processing event ──
+  // Fires only once per call (gated on event_type === all_processing_completed).
+  if (event_type === "all_processing_completed" && lead_phone) {
+    try {
+      await sendWhatsAppRecap({
+        phone: lead_phone,
+        name: lead_name,
+        project: project,
+        summary,
+        analysis,
+        clientAnalysis: client_analysis,
+        platformAnalysis: platform_analysis,
+      });
+    } catch (e) {
+      console.error("[ringg-webhook] whatsapp recap failed", e);
+    }
   }
 
   return new Response(
