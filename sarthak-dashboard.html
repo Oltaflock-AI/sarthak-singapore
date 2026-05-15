@@ -1,0 +1,532 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1.0" />
+<title>Sarthak Singapore — AI Sales Engine Dashboard</title>
+<script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"></script>
+<style>
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  :root {
+    --bg: #0f0e0c;
+    --bg-2: #18160f;
+    --panel: #1c1a14;
+    --panel-2: #221f17;
+    --line: #2b2820;
+    --gold: #c9a85a;
+    --gold-2: #d4b56b;
+    --gold-dim: #8a7440;
+    --text: #f5f2ea;
+    --muted: #a39a85;
+    --green: #6db77a;
+    --red: #d97a6a;
+    --orange: #e09f4e;
+  }
+  html, body {
+    background: var(--bg);
+    color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    font-size: 14px;
+    min-height: 100vh;
+  }
+  .app { max-width: 1440px; margin: 0 auto; padding: 24px 32px; }
+
+  /* Header */
+  .topbar {
+    display: flex; align-items: center; justify-content: space-between;
+    padding-bottom: 18px; border-bottom: 1px solid var(--line); margin-bottom: 24px;
+  }
+  .brand { display: flex; align-items: center; gap: 14px; }
+  .brand-mark {
+    width: 36px; height: 36px; border-radius: 8px;
+    background: linear-gradient(135deg, var(--gold) 0%, var(--gold-dim) 100%);
+    display: flex; align-items: center; justify-content: center;
+    font-weight: 700; font-size: 18px; color: #1a1611;
+  }
+  .brand-text { display: flex; flex-direction: column; }
+  .brand-text .name { font-weight: 600; font-size: 15px; letter-spacing: 0.3px; }
+  .brand-text .sub { font-size: 11px; color: var(--muted); letter-spacing: 0.5px; text-transform: uppercase; }
+  .topbar-right { display: flex; align-items: center; gap: 16px; font-size: 12px; color: var(--muted); }
+  .live-dot {
+    display: inline-block; width: 8px; height: 8px; border-radius: 50%;
+    background: var(--green); margin-right: 6px;
+    animation: pulse 2s ease-in-out infinite;
+  }
+  @keyframes pulse { 0%,100%{opacity:1} 50%{opacity:0.4} }
+
+  /* Tabs */
+  .tabs { display: flex; gap: 4px; margin-bottom: 24px; border-bottom: 1px solid var(--line); }
+  .tab {
+    padding: 10px 18px; cursor: pointer; font-size: 13px; font-weight: 500;
+    color: var(--muted); border-bottom: 2px solid transparent; transition: all 0.15s;
+  }
+  .tab:hover { color: var(--text); }
+  .tab.active { color: var(--gold); border-bottom-color: var(--gold); }
+
+  /* KPI Cards */
+  .kpi-grid {
+    display: grid; grid-template-columns: repeat(4, 1fr); gap: 16px; margin-bottom: 24px;
+  }
+  .kpi {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .kpi-label { font-size: 11px; color: var(--muted); letter-spacing: 0.7px; text-transform: uppercase; margin-bottom: 8px; }
+  .kpi-value { font-size: 32px; font-weight: 600; line-height: 1; }
+  .kpi-delta { font-size: 12px; margin-top: 8px; }
+  .kpi-delta.up { color: var(--green); }
+  .kpi-delta.down { color: var(--green); }
+
+  /* Charts row */
+  .chart-row { display: grid; grid-template-columns: 1.4fr 1fr; gap: 16px; margin-bottom: 24px; }
+  .panel {
+    background: var(--panel); border: 1px solid var(--line); border-radius: 10px;
+    padding: 18px 20px;
+  }
+  .panel-title {
+    font-size: 11px; color: var(--muted); letter-spacing: 0.7px;
+    text-transform: uppercase; margin-bottom: 14px;
+    display: flex; align-items: center; justify-content: space-between;
+  }
+  .panel-title .sub { color: var(--gold); font-weight: 500; }
+  .chart-wrap { height: 240px; position: relative; }
+
+  /* Activity row */
+  .activity-row { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 24px; }
+
+  /* Voice calls */
+  .call-list { display: flex; flex-direction: column; gap: 10px; }
+  .call-item {
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px;
+    padding: 14px; cursor: pointer; transition: all 0.15s;
+  }
+  .call-item:hover { border-color: var(--gold-dim); }
+  .call-row1 { display: flex; justify-content: space-between; align-items: center; margin-bottom: 6px; }
+  .call-name { font-weight: 600; font-size: 14px; }
+  .call-meta { font-size: 11px; color: var(--muted); }
+  .call-row2 { display: flex; gap: 12px; align-items: center; font-size: 12px; color: var(--muted); }
+  .score {
+    padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600;
+  }
+  .score.hot { background: rgba(109, 183, 122, 0.15); color: var(--green); }
+  .score.warm { background: rgba(224, 159, 78, 0.15); color: var(--orange); }
+  .score.cold { background: rgba(163, 154, 133, 0.15); color: var(--muted); }
+  .badge {
+    font-size: 10px; padding: 2px 7px; border-radius: 4px;
+    background: rgba(201, 168, 90, 0.12); color: var(--gold); letter-spacing: 0.4px; text-transform: uppercase;
+  }
+
+  /* Transcript modal */
+  .transcript {
+    display: none; margin-top: 12px; padding: 12px; background: var(--bg-2);
+    border-radius: 6px; border: 1px solid var(--line);
+  }
+  .call-item.expanded .transcript { display: block; }
+  .turn { margin-bottom: 10px; font-size: 12.5px; line-height: 1.55; }
+  .turn .speaker { font-weight: 600; color: var(--gold); font-size: 11px; text-transform: uppercase; letter-spacing: 0.5px; }
+  .turn.user .speaker { color: var(--text); }
+  .turn-meta { font-size: 10px; color: var(--muted); margin-left: 8px; }
+
+  /* WhatsApp inbox */
+  .wa-list { display: flex; flex-direction: column; gap: 0; max-height: 480px; overflow-y: auto; }
+  .wa-item {
+    padding: 12px 4px; border-bottom: 1px solid var(--line); cursor: pointer;
+    display: grid; grid-template-columns: 36px 1fr auto; gap: 12px; align-items: center;
+  }
+  .wa-item:last-child { border-bottom: none; }
+  .wa-avatar {
+    width: 36px; height: 36px; border-radius: 50%;
+    background: linear-gradient(135deg, var(--gold-dim), #4a3f24);
+    display: flex; align-items: center; justify-content: center;
+    color: #1a1611; font-weight: 600; font-size: 13px;
+  }
+  .wa-body { min-width: 0; }
+  .wa-name { font-weight: 600; font-size: 13px; margin-bottom: 2px; }
+  .wa-preview { font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .wa-time { font-size: 10px; color: var(--muted); white-space: nowrap; }
+  .wa-unread {
+    display: inline-block; min-width: 16px; height: 16px; padding: 0 4px;
+    background: var(--gold); color: #1a1611; border-radius: 8px;
+    font-size: 10px; font-weight: 700; text-align: center; line-height: 16px; margin-left: 6px;
+  }
+
+  /* Footer */
+  .footer {
+    text-align: center; padding: 24px 0 8px; color: var(--muted);
+    font-size: 11px; letter-spacing: 0.7px; text-transform: uppercase;
+    border-top: 1px solid var(--line); margin-top: 16px;
+  }
+  .footer span { color: var(--gold); }
+
+  /* Responsive */
+  @media (max-width: 1100px) {
+    .kpi-grid { grid-template-columns: repeat(2, 1fr); }
+    .chart-row, .activity-row { grid-template-columns: 1fr; }
+  }
+</style>
+</head>
+<body>
+<div class="app">
+
+  <!-- Topbar -->
+  <div class="topbar">
+    <div class="brand">
+      <div class="brand-mark">S</div>
+      <div class="brand-text">
+        <span class="name">Sarthak Singapore — AI Sales Engine</span>
+        <span class="sub">Powered by Oltaflock</span>
+      </div>
+    </div>
+    <div class="topbar-right">
+      <span><span class="live-dot"></span>Live · 9 projects · Mhow</span>
+      <span>Khush · admin@oltaflock.ai</span>
+    </div>
+  </div>
+
+  <!-- Tabs -->
+  <div class="tabs">
+    <div class="tab active" data-tab="overview">Overview</div>
+    <div class="tab" data-tab="voice">Voice Calls · 218</div>
+    <div class="tab" data-tab="whatsapp">WhatsApp · 1,066</div>
+    <div class="tab" data-tab="leads">All Leads · 1,284</div>
+    <div class="tab" data-tab="projects">Projects</div>
+  </div>
+
+  <!-- KPIs -->
+  <div class="kpi-grid">
+    <div class="kpi">
+      <div class="kpi-label">Leads This Week</div>
+      <div class="kpi-value">1,284</div>
+      <div class="kpi-delta up">▲ 18% WoW</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Qualified</div>
+      <div class="kpi-value">412</div>
+      <div class="kpi-delta up">▲ 31% WoW</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Site Visits Booked</div>
+      <div class="kpi-value">96</div>
+      <div class="kpi-delta up">▲ 22% WoW</div>
+    </div>
+    <div class="kpi">
+      <div class="kpi-label">Avg Response Time</div>
+      <div class="kpi-value">28<span style="font-size:18px;color:var(--muted)">s</span></div>
+      <div class="kpi-delta down">▼ from 4.2 hrs</div>
+    </div>
+  </div>
+
+  <!-- Charts -->
+  <div class="chart-row">
+    <div class="panel">
+      <div class="panel-title">
+        <span>Demand by project · Last 30 days</span>
+        <span class="sub">Qualified leads</span>
+      </div>
+      <div class="chart-wrap"><canvas id="projectChart"></canvas></div>
+    </div>
+    <div class="panel">
+      <div class="panel-title">
+        <span>Source mix</span>
+        <span class="sub">1,284 leads</span>
+      </div>
+      <div class="chart-wrap"><canvas id="sourceChart"></canvas></div>
+    </div>
+  </div>
+
+  <!-- Voice + WhatsApp -->
+  <div class="activity-row">
+
+    <!-- Voice -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>Recent Voice Calls</span>
+        <span class="sub">Click to expand transcript</span>
+      </div>
+      <div class="call-list" id="callList"></div>
+    </div>
+
+    <!-- WhatsApp -->
+    <div class="panel">
+      <div class="panel-title">
+        <span>WhatsApp Inbox</span>
+        <span class="sub">11 unread</span>
+      </div>
+      <div class="wa-list" id="waList"></div>
+    </div>
+
+  </div>
+
+  <div class="footer">
+    Oltaflock × Sarthak Singapore · <span>AI Sales Engine v1.0</span> · Built in 30 minutes — production deploys in 30 days
+  </div>
+</div>
+
+<script>
+// ============ CONFIG ============
+// Set these to pull live data from Supabase.
+// Leave blank to use the demo mock data below.
+const SUPABASE_URL = "";         // e.g. "https://xxxxx.supabase.co"
+const SUPABASE_ANON_KEY = "";    // your anon (public) key — RLS protects rows
+const LIVE_MODE = SUPABASE_URL && SUPABASE_ANON_KEY;
+
+// ============ DATA ============
+
+const calls = [
+  {
+    name: "Rohan Sharma", phone: "+91 98765 ••• ••12",
+    project: "Grand Virasat · 3BHK", source: "Meta Lead Ad",
+    score: 92, scoreLabel: "HOT", duration: "2m 14s",
+    when: "2 min ago", outcome: "Site visit booked · Sat 11am",
+    transcript: [
+      { speaker: "Priya (AI)", time: "00:02", text: "Namaste Rohan ji, main Priya bol rahi hoon Sarthak Singapore se. Aapne abhi Grand Virasat ke baare mein enquiry ki thi — kya 2 minute baat kar sakte hain?", side: "ai" },
+      { speaker: "Rohan", time: "00:11", text: "Haan ji, batao. Main 3BHK dekh raha tha.", side: "user" },
+      { speaker: "Priya (AI)", time: "00:14", text: "Bilkul. Grand Virasat mein hum 2BHK aur 3BHK dono offer karte hain, Mhow main road pe. Possession December 2026 mein hai. Aap end-use ke liye dekh rahe hain ya investment?", side: "ai" },
+      { speaker: "Rohan", time: "00:25", text: "End-use. Family ke liye. December 2026 tak ready chahiye.", side: "user" },
+      { speaker: "Priya (AI)", time: "00:31", text: "Perfect timing! Aap NRI hain ya local?", side: "ai" },
+      { speaker: "Rohan", time: "00:35", text: "Local — Indore mein hi rehta hoon.", side: "user" },
+      { speaker: "Priya (AI)", time: "00:38", text: "Achha. Toh main aapko Saturday 11am ka site visit book kar deti hoon, Mhow site office pe. 3BHK floor plan WhatsApp pe abhi bhej rahi hoon. Theek hai?", side: "ai" },
+      { speaker: "Rohan", time: "00:48", text: "Haan haan, book kar do.", side: "user" },
+      { speaker: "Priya (AI)", time: "00:51", text: "Done! Saturday 11am, Grand Virasat site office. Brochure WhatsApp pe bhej rahi hoon. Dhanyavaad Rohan ji!", side: "ai" }
+    ]
+  },
+  {
+    name: "Anjali Mehta", phone: "+91 97654 ••• ••87",
+    project: "Singapore Pink City · 3BHK", source: "Google Lead Form",
+    score: 78, scoreLabel: "WARM", duration: "1m 42s",
+    when: "14 min ago", outcome: "Brochure sent · Callback Saturday",
+    transcript: [
+      { speaker: "Priya (AI)", time: "00:02", text: "Namaste Anjali ji, Sarthak Singapore se Priya bol rahi hoon. Pink City ke baare mein aapne enquiry ki thi?", side: "ai" },
+      { speaker: "Anjali", time: "00:09", text: "Yes, can you tell me about the project in English?", side: "user" },
+      { speaker: "Priya (AI)", time: "00:12", text: "Of course. Singapore Pink City is our 3BHK residential project near Mhow main road, possession December 2026. RERA-approved. Are you looking at this for your family or as an investment?", side: "ai" },
+      { speaker: "Anjali", time: "00:25", text: "Investment mainly. What's the price range?", side: "user" },
+      { speaker: "Priya (AI)", time: "00:30", text: "Our sales team will share the latest pricing on the site visit — pricing varies by floor and view. Can I send you the brochure on WhatsApp and book a visit for Saturday 11am?", side: "ai" }
+    ]
+  },
+  {
+    name: "Vivek Patel (Dubai NRI)", phone: "+971 50 ••• 4321",
+    project: "Grand Virasat · 2BHK", source: "Website",
+    score: 88, scoreLabel: "HOT", duration: "3m 02s",
+    when: "47 min ago", outcome: "Warm-transferred to sales · NRI",
+    transcript: [
+      { speaker: "Priya (AI)", time: "00:02", text: "Namaste Vivek ji, Sarthak Singapore se baat kar rahi hoon Dubai mein. Grand Virasat ke baare mein aapki enquiry mili thi.", side: "ai" },
+      { speaker: "Vivek", time: "00:11", text: "Yes, I'm based in Dubai. I want a 2BHK for my parents in Mhow. What's the timeline?", side: "user" },
+      { speaker: "Priya (AI)", time: "00:18", text: "Perfect. Grand Virasat 2BHK, possession December 2026, on Mhow main road. We handle full NRI buyer support — payment plans, RERA paperwork, video site tours. Would you like me to connect you with our NRI sales head right now?", side: "ai" }
+    ]
+  },
+  {
+    name: "Sneha Joshi", phone: "+91 98123 ••• ••54",
+    project: "Modern City", source: "99acres",
+    score: 45, scoreLabel: "COLD", duration: "0m 51s",
+    when: "1 hr ago", outcome: "Just browsing · Added to 14-day nurture",
+    transcript: [
+      { speaker: "Priya (AI)", time: "00:02", text: "Namaste Sneha ji, Sarthak Singapore se. Modern City ke baare mein aapne dekh raha tha?", side: "ai" },
+      { speaker: "Sneha", time: "00:09", text: "Haan abhi just dekh rahi thi, kuch final nahi hai.", side: "user" },
+      { speaker: "Priya (AI)", time: "00:13", text: "Bilkul samajhti hoon. Main aapko WhatsApp pe brochure bhej deti hoon — jab bhi seriously dekhna ho, hum hain. Theek hai?", side: "ai" }
+    ]
+  },
+  {
+    name: "Karan Agarwal", phone: "+91 99887 ••• ••32",
+    project: "Oracle City · Commercial", source: "Meta Lead Ad",
+    score: 81, scoreLabel: "HOT", duration: "2m 38s",
+    when: "1 hr ago", outcome: "Site visit booked · Sun 11am",
+    transcript: [
+      { speaker: "Priya (AI)", time: "00:02", text: "Namaste Karan ji, Sarthak Singapore se. Oracle City commercial space ke baare mein enquiry ki thi aapne.", side: "ai" },
+      { speaker: "Karan", time: "00:10", text: "Yes. Shop chahiye showroom ke liye. Frontage kaisa hai?", side: "user" },
+      { speaker: "Priya (AI)", time: "00:15", text: "Oracle City Mhow main road pe hai, premium frontage. Possession 2027. Aap kya size dekh rahe hain — 500 sq ft, 1000 sq ft?", side: "ai" }
+    ]
+  }
+];
+
+const waConvos = [
+  { name: "Pooja Iyer", initial: "P", preview: "Saturday 11am perfect hai. Address bhej do.", time: "now", unread: 0 },
+  { name: "Aakash Verma", initial: "A", preview: "3BHK Pink City ka floor plan mil gaya, thanks!", time: "3m", unread: 0 },
+  { name: "Rashid Khan (Dubai)", initial: "R", preview: "Can you arrange a video tour next week?", time: "12m", unread: 2 },
+  { name: "Meera Singh", initial: "M", preview: "Possession date confirm kar sakte ho?", time: "28m", unread: 1 },
+  { name: "Deepak Choudhary", initial: "D", preview: "Maine brochure dekha, price kya hai?", time: "45m", unread: 1 },
+  { name: "Sanya Kapoor", initial: "S", preview: "Saturday available nahi, Sunday kar sakte?", time: "1h", unread: 0 },
+  { name: "Imran Sheikh (Doha)", initial: "I", preview: "NRI payment plan documents kab milenge?", time: "2h", unread: 3 },
+  { name: "Vikram Reddy", initial: "V", preview: "Oracle City commercial — 1500 sqft available?", time: "3h", unread: 0 },
+  { name: "Nidhi Sharma", initial: "N", preview: "Site visit ke liye gate pass chahiye?", time: "4h", unread: 1 },
+  { name: "Ashok Mehta", initial: "A", preview: "Loan partner banks kaun kaun se hain?", time: "5h", unread: 0 },
+  { name: "Geeta Pillai", initial: "G", preview: "Haan main interested hoon, call karwa do", time: "6h", unread: 2 },
+  { name: "Rohit Bansal", initial: "R", preview: "Modern City plot ka rate batao", time: "7h", unread: 0 }
+];
+
+// ============ RENDER ============
+
+function renderCalls() {
+  const list = document.getElementById('callList');
+  list.innerHTML = calls.map((c, i) => `
+    <div class="call-item" data-i="${i}">
+      <div class="call-row1">
+        <span class="call-name">${c.name}</span>
+        <span class="call-meta">${c.when} · ${c.duration}</span>
+      </div>
+      <div class="call-row2">
+        <span class="score ${c.scoreLabel.toLowerCase()}">${c.scoreLabel} · ${c.score}</span>
+        <span class="badge">${c.source}</span>
+        <span>${c.project}</span>
+      </div>
+      <div style="font-size:11px;color:var(--muted);margin-top:6px;">→ ${c.outcome}</div>
+      <div class="transcript">
+        ${c.transcript.map(t => `
+          <div class="turn ${t.side}">
+            <span class="speaker">${t.speaker}</span><span class="turn-meta">${t.time}</span><br>
+            ${t.text}
+          </div>
+        `).join('')}
+      </div>
+    </div>
+  `).join('');
+  list.querySelectorAll('.call-item').forEach(el => {
+    el.addEventListener('click', () => el.classList.toggle('expanded'));
+  });
+}
+
+function renderWA() {
+  const list = document.getElementById('waList');
+  list.innerHTML = waConvos.map(w => `
+    <div class="wa-item">
+      <div class="wa-avatar">${w.initial}</div>
+      <div class="wa-body">
+        <div class="wa-name">${w.name}</div>
+        <div class="wa-preview">${w.preview}</div>
+      </div>
+      <div style="text-align:right;">
+        <div class="wa-time">${w.time}</div>
+        ${w.unread > 0 ? `<span class="wa-unread">${w.unread}</span>` : ''}
+      </div>
+    </div>
+  `).join('');
+}
+
+function renderProjectChart() {
+  const ctx = document.getElementById('projectChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'bar',
+    data: {
+      labels: ['Grand Virasat', 'Pink City', 'Modern City', 'Oracle City', 'One Street', 'King Estate'],
+      datasets: [{
+        data: [218, 168, 132, 109, 76, 58],
+        backgroundColor: ['#c9a85a', '#b8975a', '#a78657', '#8a7440', '#6e5d33', '#544626'],
+        borderRadius: 4,
+        barThickness: 22
+      }]
+    },
+    options: {
+      indexAxis: 'y',
+      plugins: { legend: { display: false } },
+      scales: {
+        x: { grid: { color: '#2b2820' }, ticks: { color: '#a39a85', font: { size: 11 } } },
+        y: { grid: { display: false }, ticks: { color: '#f5f2ea', font: { size: 12, weight: 500 } } }
+      },
+      maintainAspectRatio: false
+    }
+  });
+}
+
+function renderSourceChart() {
+  const ctx = document.getElementById('sourceChart').getContext('2d');
+  new Chart(ctx, {
+    type: 'doughnut',
+    data: {
+      labels: ['Meta · 42%', 'Google · 28%', '99acres · 18%', 'Direct · 12%'],
+      datasets: [{
+        data: [42, 28, 18, 12],
+        backgroundColor: ['#c9a85a', '#8a7440', '#544626', '#3a2f1a'],
+        borderWidth: 0
+      }]
+    },
+    options: {
+      cutout: '65%',
+      plugins: {
+        legend: {
+          position: 'right',
+          labels: { color: '#f5f2ea', font: { size: 12 }, padding: 12, boxWidth: 12 }
+        }
+      },
+      maintainAspectRatio: false
+    }
+  });
+}
+
+// Tabs (visual only — placeholder for future routing)
+document.querySelectorAll('.tab').forEach(t => {
+  t.addEventListener('click', () => {
+    document.querySelectorAll('.tab').forEach(x => x.classList.remove('active'));
+    t.classList.add('active');
+  });
+});
+
+// ============ LIVE MODE — fetch from Supabase ============
+async function supaFetch(table, params = "") {
+  const r = await fetch(`${SUPABASE_URL}/rest/v1/${table}?${params}`, {
+    headers: {
+      apikey: SUPABASE_ANON_KEY,
+      Authorization: `Bearer ${SUPABASE_ANON_KEY}`
+    }
+  });
+  return r.json();
+}
+
+async function loadLive() {
+  try {
+    const [liveCalls, liveWa] = await Promise.all([
+      supaFetch("calls", "select=*&order=created_at.desc&limit=20"),
+      supaFetch("wa_messages", "select=*&order=created_at.desc&limit=20")
+    ]);
+    if (Array.isArray(liveCalls) && liveCalls.length) {
+      calls.length = 0;
+      liveCalls.forEach(c => calls.push({
+        name: c.lead_name, phone: c.lead_phone,
+        project: c.project, source: c.source,
+        score: c.lead_score, scoreLabel: c.score_label,
+        duration: `${Math.floor(c.duration_seconds/60)}m ${c.duration_seconds%60}s`,
+        when: timeAgo(c.created_at), outcome: c.outcome || "—",
+        transcript: (c.transcript || []).map(t => ({
+          speaker: t.speaker === 'agent' ? 'Priya (AI)' : (c.lead_name?.split(' ')[0] || 'Buyer'),
+          time: t.timestamp, text: t.text,
+          side: t.speaker === 'agent' ? 'ai' : 'user'
+        }))
+      }));
+    }
+    if (Array.isArray(liveWa) && liveWa.length) {
+      waConvos.length = 0;
+      liveWa.forEach(w => waConvos.push({
+        name: w.name || w.from_number,
+        initial: (w.name || 'U')[0].toUpperCase(),
+        preview: w.text_in || w.text_out || '',
+        time: timeAgo(w.created_at),
+        unread: 0
+      }));
+    }
+  } catch (e) {
+    console.warn("Supabase fetch failed — using mock data.", e);
+  }
+}
+
+function timeAgo(ts) {
+  const s = Math.floor((Date.now() - new Date(ts).getTime()) / 1000);
+  if (s < 60) return `${s}s`;
+  if (s < 3600) return `${Math.floor(s/60)}m`;
+  if (s < 86400) return `${Math.floor(s/3600)}h`;
+  return `${Math.floor(s/86400)}d`;
+}
+
+(async () => {
+  if (LIVE_MODE) await loadLive();
+  renderCalls();
+  renderWA();
+  renderProjectChart();
+  renderSourceChart();
+  // Poll every 10s in live mode so demo refreshes as calls/messages come in
+  if (LIVE_MODE) setInterval(async () => {
+    await loadLive();
+    renderCalls();
+    renderWA();
+  }, 10000);
+})();
+</script>
+</body>
+</html>
