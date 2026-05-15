@@ -199,27 +199,39 @@ async function handleCrmSideEffects(
       (p) => p.brochure_url && (p.name.toLowerCase().includes(wanted) || wanted.includes(p.name.toLowerCase()))
     );
     if (match?.brochure_url) {
-      await fetch(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
-        method: "POST",
-        headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, "Content-Type": "application/json" },
-        body: JSON.stringify({
-          messaging_product: "whatsapp",
-          to: phone,
-          type: "document",
-          document: {
-            link: match.brochure_url,
-            filename: `${match.name.replace(/\s+/g, "_")}.pdf`,
-            caption: `${match.name} — brochure`,
-          },
-        }),
-      }).catch((e) => console.error("brochure send failed:", e));
+      // Dedupe: only send once per (phone, project). Check if a [brochure] log already exists.
+      const brochureMarker = `[brochure] ${match.name}`;
+      const { data: alreadySent } = await supabase
+        .from("wa_messages")
+        .select("id")
+        .eq("from_number", phone)
+        .eq("text_out", brochureMarker)
+        .limit(1)
+        .maybeSingle();
 
-      await supabase.from("wa_messages").insert({
-        from_number: phone,
-        name: "Priya (auto)",
-        text_in: null,
-        text_out: `[brochure] ${match.name}`,
-      });
+      if (!alreadySent) {
+        await fetch(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+          method: "POST",
+          headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, "Content-Type": "application/json" },
+          body: JSON.stringify({
+            messaging_product: "whatsapp",
+            to: phone,
+            type: "document",
+            document: {
+              link: match.brochure_url,
+              filename: `${match.name.replace(/\s+/g, "_")}.pdf`,
+              caption: `${match.name} — brochure`,
+            },
+          }),
+        }).catch((e) => console.error("brochure send failed:", e));
+
+        await supabase.from("wa_messages").insert({
+          from_number: phone,
+          name: "Priya (auto)",
+          text_in: null,
+          text_out: brochureMarker,
+        });
+      }
     }
   }
 }

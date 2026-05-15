@@ -108,44 +108,35 @@ function composeRecap(args: {
   const greeting = firstName.charAt(0).toUpperCase() + firstName.slice(1);
 
   const projectName = humanizeWord(args.project ?? args.clientAnalysis.project_interest);
-  const budget = humanizeBudgetMsg(args.clientAnalysis.budget_range);
-  const timeline = humanizeWord(args.clientAnalysis.timeline);
   const siteVisitBooked = args.clientAnalysis.site_visit_booked === true ||
     args.platformAnalysis.classification === "site_visit_booked";
   const visitWhen = extractSiteVisitWhen(args.platformAnalysis.action_items);
+  const address = Deno.env.get("SITE_VISIT_ADDRESS") ?? "Grand Virasat, Mhow Main Road, Indore 453441";
 
   const lines: string[] = [];
   lines.push(`Hi ${greeting},`);
   lines.push("");
-  lines.push("Thank you for speaking with our team at Sarthak Singapore! 🙏");
-  lines.push("");
-
-  if (args.summary) {
-    lines.push("Here's a quick recap of what we discussed:");
-    lines.push(args.summary);
-    lines.push("");
-  }
-
-  const bullets: string[] = [];
-  if (projectName) bullets.push(`• *Project:* ${projectName}`);
-  if (budget) bullets.push(`• *Budget:* ${budget}`);
-  if (timeline) bullets.push(`• *Timeline:* ${timeline}`);
-  if (bullets.length > 0) {
-    lines.push("📋 Your requirements:");
-    lines.push(...bullets);
-    lines.push("");
-  }
 
   if (siteVisitBooked) {
-    lines.push("✅ *Site visit confirmed*");
-    if (visitWhen) lines.push(`📅 ${visitWhen}`);
-    lines.push("We'll send you the exact venue, directions, and a reminder closer to the visit.");
+    lines.push(visitWhen ? `✅ Site visit confirmed — ${visitWhen}` : "✅ Site visit confirmed");
+    lines.push(`📍 ${address}`);
     lines.push("");
   }
 
-  lines.push("If anything changes or you have questions, just reply to this message — we're here to help!");
+  if (args.summary) {
+    lines.push("Quick recap of our call:");
+    lines.push(args.summary);
+    lines.push("");
+  } else if (projectName) {
+    lines.push(`Thanks for your interest in ${projectName}.`);
+    lines.push("");
+  }
+
+  lines.push(siteVisitBooked
+    ? "We'll send directions and a reminder before the visit. Reply here with any questions."
+    : "Reply here anytime if you have questions or want to book a site visit.");
   lines.push("");
-  lines.push("— Priya, Sarthak Singapore");
+  lines.push("— Sarthak Singapore Team");
 
   return lines.join("\n");
 }
@@ -175,6 +166,22 @@ async function sendWhatsAppRecap(args: {
   });
 
   const toNumber = args.phone.replace(/^\+/, "");
+
+  // Dedupe: skip if this exact recap already sent to this phone in last 24h.
+  // Guards against Ringg retrying the all_processing_completed event.
+  const since = new Date(Date.now() - 24 * 60 * 60 * 1000).toISOString();
+  const { data: prior } = await supabase
+    .from("wa_messages")
+    .select("id")
+    .eq("from_number", toNumber)
+    .eq("text_out", message)
+    .gte("created_at", since)
+    .limit(1)
+    .maybeSingle();
+  if (prior) {
+    console.log("[ringg-webhook] WA recap already sent, skipping duplicate", { to: toNumber });
+    return;
+  }
 
   const resp = await fetch(`https://graph.facebook.com/v25.0/${PHONE_ID}/messages`, {
     method: "POST",
