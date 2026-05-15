@@ -226,6 +226,45 @@ Deno.serve(async (req) => {
     );
   }
 
+  // ── Also upsert into leads CRM table so voice leads show in /leads ──
+  if (lead_phone) {
+    const intent = String(client_analysis.intent ?? "").toLowerCase();
+    const buyer_type =
+      intent === "end_use" || intent === "self_use" ? "end_use" :
+      intent === "investment" ? "investment" : null;
+
+    let status: string | null = null;
+    if (client_analysis.site_visit_booked === true || platform_analysis.classification === "site_visit_booked") {
+      status = "booked";
+    } else if (lead_score != null && lead_score >= 60) {
+      status = "qualified";
+    }
+
+    const leadRow: Record<string, unknown> = {
+      phone: lead_phone,
+      source: "voice_agent",
+      updated_at: new Date().toISOString(),
+    };
+    const setLead = (k: string, v: unknown) => {
+      if (v === null || v === undefined) return;
+      if (typeof v === "string" && (!v.trim() || v === "unclear")) return;
+      leadRow[k] = v;
+    };
+    setLead("name", lead_name);
+    setLead("project", project);
+    setLead("buyer_type", buyer_type);
+    setLead("timeline", client_analysis.timeline);
+    setLead("budget", client_analysis.budget_range);
+    if (lead_score != null) {
+      leadRow.lead_score = lead_score;
+      leadRow.score_label = scoreLabel(lead_score);
+    }
+    if (status) leadRow.status = status;
+
+    const { error: leadErr } = await supabase.from("leads").upsert(leadRow, { onConflict: "phone" });
+    if (leadErr) console.error("[ringg-webhook] leads upsert error", leadErr, "row=", leadRow);
+  }
+
   return new Response(
     JSON.stringify({ ok: true, call_id }),
     { headers: { ...corsHeaders, "Content-Type": "application/json" } },
