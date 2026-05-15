@@ -1,10 +1,12 @@
 "use client";
 
 import { useEffect, useMemo, useState } from "react";
+import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ScoreBadge } from "@/components/ScoreBadge";
-import { timeAgo, initials } from "@/lib/format";
+import { timeAgo, initials, fmtDuration } from "@/lib/format";
+import { supabase } from "@/lib/data";
 
 type Lead = {
   id: string;
@@ -248,16 +250,70 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+type CallSlim = {
+  id: string;
+  call_id: string | null;
+  duration_seconds: number | null;
+  outcome: string | null;
+  summary: string | null;
+  lead_score: number | null;
+  score_label: string | null;
+  created_at: string;
+  analysis: Record<string, unknown> | null;
+};
+
+function humanize(v: unknown): string {
+  if (v === null || v === undefined) return "—";
+  if (typeof v === "boolean") return v ? "Yes" : "No";
+  const s = String(v).trim();
+  if (!s || s === "unclear") return "—";
+  return s.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase());
+}
+
+function humanizeBudget(v?: string | null): string {
+  if (!v) return "—";
+  const m = v.toLowerCase().match(/^(\d+(?:\.\d+)?)[_\s-]*(lakh|lakhs|cr|crore|crores|k)$/i);
+  if (m) {
+    const n = Number(m[1]);
+    const u = m[2].toLowerCase();
+    if (u.startsWith("lakh")) return `₹${n} Lakh${n === 1 ? "" : "s"}`;
+    if (u.startsWith("cr")) return `₹${n} Crore${n === 1 ? "" : "s"}`;
+    if (u === "k") return `₹${n}K`;
+  }
+  return humanize(v);
+}
+
+function fmtPhoneFull(p?: string | null): string {
+  if (!p) return "—";
+  const clean = p.replace(/[^\d+]/g, "");
+  if (clean.startsWith("+91") && clean.length === 13) return `+91 ${clean.slice(3, 8)} ${clean.slice(8)}`;
+  if (clean.length === 12 && clean.startsWith("91")) return `+91 ${clean.slice(2, 7)} ${clean.slice(7)}`;
+  return p;
+}
+
 function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const [messages, setMessages] = useState<WaMsg[]>([]);
+  const [calls, setCalls] = useState<CallSlim[]>([]);
   const [updating, setUpdating] = useState(false);
   const [localStatus, setLocalStatus] = useState(lead.status);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
     fetch(`/api/wa-messages?phone=${encodeURIComponent(lead.phone)}`)
       .then((r) => r.json())
-      .then((d) => Array.isArray(d) && setMessages(d.slice(0, 20)))
+      .then((d) => Array.isArray(d) && setMessages(d))
       .catch(() => {});
+
+    // Fetch all voice calls for this phone (try with + and without)
+    const phoneClean = lead.phone.replace(/^\+/, "");
+    supabase
+      .from("calls")
+      .select("id,call_id,duration_seconds,outcome,summary,lead_score,score_label,created_at,analysis")
+      .or(`lead_phone.eq.+${phoneClean},lead_phone.eq.${phoneClean}`)
+      .order("created_at", { ascending: false })
+      .then(({ data }) => {
+        if (Array.isArray(data)) setCalls(data as CallSlim[]);
+      });
   }, [lead.phone]);
 
   async function changeStatus(newStatus: string) {
@@ -271,91 +327,299 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
     setUpdating(false);
   }
 
+  function copyPhone() {
+    navigator.clipboard.writeText(lead.phone);
+    setCopied(true);
+    setTimeout(() => setCopied(false), 1500);
+  }
+
+  const isVoice = lead.source === "voice_agent" || lead.source === "ringg";
+
   return (
-    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
-      <div className="panel" style={{ background: "var(--panel)", maxWidth: 760, width: "100%", maxHeight: "90vh", overflowY: "auto", padding: 0 }} onClick={(e) => e.stopPropagation()}>
-        {/* Header */}
-        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
-          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
-            <div className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>{initials(lead.name ?? lead.phone)}</div>
+    <div
+      style={{
+        position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", backdropFilter: "blur(2px)",
+        zIndex: 100, display: "flex", justifyContent: "flex-end",
+      }}
+      onClick={onClose}
+    >
+      <div
+        className="panel"
+        style={{
+          background: "var(--panel)", width: "100%", maxWidth: 720, height: "100vh",
+          overflowY: "auto", padding: 0, borderRadius: 0, borderLeft: "1px solid var(--line-strong)",
+          animation: "slideIn 0.2s ease-out",
+        }}
+        onClick={(e) => e.stopPropagation()}
+      >
+        {/* Hero */}
+        <div style={{
+          padding: "26px 28px 22px",
+          borderBottom: "1px solid var(--line)",
+          background: "linear-gradient(180deg, rgba(201,168,90,0.04), transparent)",
+        }}>
+          <button
+            type="button"
+            onClick={onClose}
+            style={{
+              position: "absolute", top: 18, right: 22, background: "transparent",
+              border: "none", color: "var(--muted)", fontSize: 20, cursor: "pointer", lineHeight: 1,
+            }}
+            aria-label="Close"
+          >×</button>
+
+          <div style={{ display: "flex", gap: 16, alignItems: "center", marginBottom: 16 }}>
+            <div className="avatar" style={{ width: 56, height: 56, fontSize: 20, flexShrink: 0 }}>
+              {initials(lead.name ?? lead.phone)}
+            </div>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 22, fontWeight: 700, letterSpacing: -0.3, marginBottom: 4 }}>
+                {humanize(lead.name) !== "—" ? humanize(lead.name) : "Unnamed Lead"}
+              </div>
+              <div style={{ display: "flex", gap: 8, flexWrap: "wrap", alignItems: "center" }}>
+                <SourceBadge source={lead.source} />
+                <ScoreBadge score={lead.lead_score} />
+                <StatusPill status={localStatus} />
+              </div>
+            </div>
+          </div>
+
+          <div style={{
+            display: "grid", gridTemplateColumns: "1fr auto", gap: 14, alignItems: "center",
+            padding: "12px 14px", background: "var(--bg-2)", border: "1px solid var(--line)", borderRadius: 8,
+          }}>
             <div>
-              <div style={{ fontSize: 18, fontWeight: 600 }}>{lead.name ?? "Unnamed"}</div>
-              <div className="num" style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>{lead.phone}</div>
-              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>via {lead.source} · {timeAgo(lead.created_at)}</div>
+              <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.8, marginBottom: 4 }}>Phone</div>
+              <a href={`tel:${lead.phone}`} className="num" style={{
+                fontSize: 16, color: "var(--text)", textDecoration: "none", fontWeight: 500, letterSpacing: 0.3,
+              }}>
+                {fmtPhoneFull(lead.phone)}
+              </a>
+            </div>
+            <div style={{ display: "flex", gap: 8 }}>
+              <button type="button" onClick={copyPhone} style={{
+                padding: "7px 12px", fontSize: 11, fontWeight: 500, cursor: "pointer",
+                background: "var(--panel)", border: "1px solid var(--line)", borderRadius: 5,
+                color: "var(--text-2)",
+              }}>{copied ? "Copied ✓" : "Copy"}</button>
+              <a href={`https://wa.me/${lead.phone.replace(/[^\d]/g, "")}`} target="_blank" rel="noreferrer" style={{
+                padding: "7px 12px", fontSize: 11, fontWeight: 500, textDecoration: "none",
+                background: "rgba(37,211,102,0.1)", border: "1px solid rgba(37,211,102,0.35)",
+                borderRadius: 5, color: "#25d366",
+              }}>WhatsApp</a>
             </div>
           </div>
-          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-            <ScoreBadge score={lead.lead_score} />
-            <StatusPill status={localStatus} />
+
+          <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 12, display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <span>Created {timeAgo(lead.created_at)}</span>
+            <span>·</span>
+            <span>Updated {timeAgo(lead.updated_at)}</span>
+            <span>·</span>
+            <span>{calls.length} {calls.length === 1 ? "call" : "calls"}</span>
+            <span>·</span>
+            <span>{messages.length} WA {messages.length === 1 ? "message" : "messages"}</span>
           </div>
         </div>
 
-        {/* Quick facts grid */}
-        <div style={{ padding: "18px 24px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, borderBottom: "1px solid var(--line)" }}>
-          <Field label="Project" value={lead.project} />
-          <Field label="Buyer Type" value={lead.buyer_type?.replace(/_/g, " ") ?? null} />
-          <Field label="Residency" value={lead.residency?.toUpperCase() ?? null} />
-          <Field label="Timeline" value={lead.timeline} />
-          <Field label="Budget" value={lead.budget} />
-          <Field label="Last Update" value={timeAgo(lead.updated_at)} />
-          <Field label="Score" value={`${lead.lead_score} / 100`} />
-          <Field label="Status" value={localStatus} />
+        {/* Qualification tiles */}
+        <SectionHeader title="Qualification" />
+        <div style={{
+          padding: "0 28px 24px",
+          display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 10,
+        }}>
+          <Tile label="Project" value={humanize(lead.project)} />
+          <Tile label="Buyer Type" value={humanize(lead.buyer_type)} />
+          <Tile label="Budget" value={humanizeBudget(lead.budget)} accent="var(--gold-2)" />
+          <Tile label="Timeline" value={humanize(lead.timeline)} />
+          <Tile label="Residency" value={lead.residency ? lead.residency.toUpperCase() : "—"} />
+          <Tile label="Score" value={`${lead.lead_score} / 100`} />
         </div>
 
-        {/* WhatsApp preview */}
-        <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--line)" }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Recent WhatsApp ({messages.length})</div>
-          {messages.length === 0 ? (
-            <div style={{ fontSize: 12, color: "var(--muted)" }}>No messages found.</div>
-          ) : (
-            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 240, overflowY: "auto", paddingRight: 4 }}>
-              {messages.slice().reverse().map((m) => (
-                <div key={m.id}>
-                  {m.text_in && (
-                    <div style={{ background: "var(--panel)", border: "1px solid var(--line)", padding: "6px 10px", borderRadius: 6, fontSize: 12, marginBottom: 4 }}>
-                      <div style={{ fontSize: 9.5, color: "var(--muted)", marginBottom: 2 }}>{lead.name ?? "Lead"} · {timeAgo(m.created_at)}</div>
-                      {m.text_in}
+        {/* Voice Calls */}
+        {calls.length > 0 && (
+          <>
+            <SectionHeader title={`Voice Calls (${calls.length})`} />
+            <div style={{ padding: "0 28px 24px", display: "flex", flexDirection: "column", gap: 10 }}>
+              {calls.map((c) => {
+                const a = (c.analysis ?? {}) as Record<string, unknown>;
+                const siteVisit = a.site_visit_booked === true;
+                return (
+                  <Link
+                    key={c.id}
+                    href={`/calls/${c.id}`}
+                    style={{
+                      display: "block", padding: "14px 16px", borderRadius: 8,
+                      background: "var(--bg-2)", border: "1px solid var(--line)",
+                      textDecoration: "none", color: "inherit", transition: "border-color 0.15s",
+                    }}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--gold-dim)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--line)")}
+                  >
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                        <ScoreBadge score={c.lead_score} />
+                        <span style={{ fontSize: 11.5, color: "var(--muted)", textTransform: "capitalize" }}>
+                          {c.outcome ?? "completed"} · {fmtDuration(c.duration_seconds ?? 0)}
+                        </span>
+                        {siteVisit && (
+                          <span style={{
+                            fontSize: 10, padding: "2px 7px", borderRadius: 999,
+                            background: "rgba(125,199,125,0.12)", color: "#7dc77d",
+                            border: "1px solid rgba(125,199,125,0.3)", fontWeight: 500,
+                          }}>✓ Site visit</span>
+                        )}
+                      </div>
+                      <span style={{ fontSize: 11, color: "var(--muted)" }}>{timeAgo(c.created_at)}</span>
                     </div>
-                  )}
-                  {m.text_out && (
-                    <div style={{ background: "var(--gold-soft-2)", border: "1px solid var(--gold-dim)", padding: "6px 10px", borderRadius: 6, fontSize: 12 }}>
-                      <div style={{ fontSize: 9.5, color: "var(--gold-dim)", marginBottom: 2 }}>Priya · {timeAgo(m.created_at)}</div>
-                      {m.text_out}
+                    {c.summary && (
+                      <div style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.5, marginTop: 4 }}>
+                        {c.summary}
+                      </div>
+                    )}
+                    <div style={{ fontSize: 10.5, color: "var(--gold-2)", marginTop: 8 }}>
+                      Open full transcript →
                     </div>
-                  )}
-                </div>
-              ))}
+                  </Link>
+                );
+              })}
             </div>
-          )}
-        </div>
+          </>
+        )}
 
-        {/* Action footer */}
-        <div style={{ padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
-          <div style={{ display: "flex", gap: 8 }}>
-            {STATUS_OPTIONS.filter((s) => s !== localStatus).map((s) => (
-              <button
-                key={s}
-                type="button"
-                onClick={() => changeStatus(s)}
-                disabled={updating}
-                style={{ padding: "6px 12px", background: "transparent", color: "var(--text)", border: "1px solid var(--line-strong)", borderRadius: 4, cursor: "pointer", fontSize: 11, textTransform: "capitalize" }}
-              >
-                Mark {s}
-              </button>
-            ))}
+        {/* WhatsApp Conversation */}
+        {messages.length > 0 && (
+          <>
+            <SectionHeader title={`WhatsApp Conversation (${messages.length})`} />
+            <div style={{ padding: "0 28px 24px" }}>
+              <div style={{
+                display: "flex", flexDirection: "column", gap: 10, maxHeight: 360,
+                overflowY: "auto", padding: 14, background: "var(--bg-2)",
+                border: "1px solid var(--line)", borderRadius: 8,
+              }}>
+                {messages.slice().reverse().map((m) => (
+                  <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+                    {m.text_in && (
+                      <div style={{ display: "flex", justifyContent: "flex-start" }}>
+                        <div style={{
+                          maxWidth: "80%", padding: "8px 12px", borderRadius: 10,
+                          background: "var(--panel)", border: "1px solid var(--line)",
+                          fontSize: 12.5, lineHeight: 1.5,
+                        }}>
+                          <div style={{ fontSize: 9.5, color: "var(--muted)", marginBottom: 3, fontWeight: 500 }}>
+                            {humanize(lead.name) !== "—" ? humanize(lead.name) : "Lead"} · {timeAgo(m.created_at)}
+                          </div>
+                          {m.text_in}
+                        </div>
+                      </div>
+                    )}
+                    {m.text_out && (
+                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
+                        <div style={{
+                          maxWidth: "80%", padding: "8px 12px", borderRadius: 10,
+                          background: "rgba(201,168,90,0.08)", border: "1px solid rgba(201,168,90,0.25)",
+                          fontSize: 12.5, lineHeight: 1.5, color: "var(--text)",
+                        }}>
+                          <div style={{ fontSize: 9.5, color: "var(--gold-2)", marginBottom: 3, fontWeight: 500 }}>
+                            Priya · {timeAgo(m.created_at)}
+                          </div>
+                          {m.text_out}
+                        </div>
+                      </div>
+                    )}
+                  </div>
+                ))}
+              </div>
+            </div>
+          </>
+        )}
+
+        {/* Notes */}
+        {lead.notes && (
+          <>
+            <SectionHeader title="Notes" />
+            <div style={{ padding: "0 28px 24px" }}>
+              <div className="panel" style={{ padding: "14px 16px", fontSize: 13, lineHeight: 1.55, color: "var(--text-2)" }}>
+                {lead.notes}
+              </div>
+            </div>
+          </>
+        )}
+
+        {calls.length === 0 && messages.length === 0 && (
+          <div style={{ padding: "0 28px 24px", fontSize: 12.5, color: "var(--muted)" }}>
+            No voice calls or WhatsApp messages yet for this lead.
           </div>
-          <button type="button" onClick={onClose} style={{ padding: "8px 14px", background: "var(--gold)", color: "#000", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Close</button>
+        )}
+
+        {/* Status actions */}
+        <div style={{
+          position: "sticky", bottom: 0, padding: "14px 28px",
+          background: "var(--panel)", borderTop: "1px solid var(--line)",
+          display: "flex", gap: 8, flexWrap: "wrap",
+        }}>
+          <div style={{ fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.8, alignSelf: "center", marginRight: 6 }}>
+            Move to:
+          </div>
+          {STATUS_OPTIONS.filter((s) => s !== localStatus).map((s) => (
+            <button
+              key={s}
+              type="button"
+              onClick={() => changeStatus(s)}
+              disabled={updating}
+              style={{
+                padding: "7px 13px", background: "transparent", color: "var(--text-2)",
+                border: "1px solid var(--line)", borderRadius: 5, cursor: "pointer",
+                fontSize: 11.5, textTransform: "capitalize", fontWeight: 500,
+                transition: "all 0.15s",
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.borderColor = "var(--gold-dim)";
+                e.currentTarget.style.color = "var(--gold-2)";
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.borderColor = "var(--line)";
+                e.currentTarget.style.color = "var(--text-2)";
+              }}
+            >
+              {s}
+            </button>
+          ))}
         </div>
       </div>
+      <style jsx>{`
+        @keyframes slideIn {
+          from { transform: translateX(40px); opacity: 0; }
+          to { transform: translateX(0); opacity: 1; }
+        }
+      `}</style>
     </div>
   );
 }
 
-function Field({ label, value }: { label: string; value: string | null }) {
+function SectionHeader({ title }: { title: string }) {
   return (
-    <div>
-      <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
-      <div style={{ fontSize: 13 }}>{value ?? "—"}</div>
+    <div style={{
+      padding: "20px 28px 10px",
+      fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase",
+      letterSpacing: 1.2, fontWeight: 600,
+    }}>
+      {title}
+    </div>
+  );
+}
+
+function Tile({ label, value, accent }: { label: string; value: string; accent?: string }) {
+  return (
+    <div style={{
+      padding: "12px 14px", background: "var(--bg-2)", border: "1px solid var(--line)",
+      borderRadius: 7, transition: "border-color 0.15s",
+    }}>
+      <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.7, fontWeight: 500 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 13.5, color: accent ?? "var(--text)", marginTop: 5, fontWeight: 500, lineHeight: 1.3 }}>
+        {value}
+      </div>
     </div>
   );
 }
