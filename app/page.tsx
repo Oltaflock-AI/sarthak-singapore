@@ -33,6 +33,12 @@ type Visit = {
   created_at: string;
 };
 
+// Module-scope cache so leaving and returning to /overview doesn't flash empty
+// state. We keep the last successful payload and seed useState from it on
+// remount; the background refetch still runs to refresh the data.
+let cachedLeads: Lead[] = [];
+let cachedVisits: Visit[] = [];
+
 const ICONS = {
   leads: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="7" r="3" /><path d="M3.5 17a6.5 6.5 0 0 1 13 0" /></svg>,
   qualified: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 10l3.5 3.5L15 6.5" /></svg>,
@@ -44,19 +50,22 @@ const ICONS = {
 
 export default function Overview() {
   const { calls, waMessages } = useLiveData();
-  const [leads, setLeads] = useState<Lead[]>([]);
-  const [visits, setVisits] = useState<Visit[]>([]);
+  const [leads, setLeads] = useState<Lead[]>(() => cachedLeads);
+  const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
   const chartRefs = useRef<{ project: unknown; source: unknown; status: unknown }>({ project: null, source: null, status: null });
-  const scriptReady = useRef(false);
 
   useEffect(() => {
     const fetchAll = async () => {
-      const [l, v] = await Promise.all([
-        fetch("/api/leads", { cache: "no-store" }).then((r) => r.json()),
-        fetch("/api/site-visits", { cache: "no-store" }).then((r) => r.json()),
-      ]);
-      if (Array.isArray(l)) setLeads(l);
-      if (Array.isArray(v)) setVisits(v);
+      try {
+        const [l, v] = await Promise.all([
+          fetch("/api/leads", { cache: "no-store" }).then((r) => r.json()),
+          fetch("/api/site-visits", { cache: "no-store" }).then((r) => r.json()),
+        ]);
+        if (Array.isArray(l)) { cachedLeads = l; setLeads(l); }
+        if (Array.isArray(v)) { cachedVisits = v; setVisits(v); }
+      } catch (err) {
+        console.error("[overview] fetch failed", err);
+      }
     };
     fetchAll();
     const id = setInterval(fetchAll, 8000);
@@ -202,13 +211,23 @@ export default function Overview() {
   };
 
   useEffect(() => {
-    if (scriptReady.current) renderCharts();
+    // chart.js may have loaded on a previous mount — check the global directly
+    // rather than a per-mount ref so charts re-render on revisit.
+    // @ts-expect-error CDN global
+    if (typeof window !== "undefined" && window.Chart) {
+      renderCharts();
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metrics]);
 
   return (
     <>
-      <Script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js" onLoad={() => { scriptReady.current = true; renderCharts(); }} />
+      <Script
+        src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
+        strategy="afterInteractive"
+        onLoad={() => { renderCharts(); }}
+        onReady={() => { renderCharts(); }}
+      />
 
       <PageHeader title="Overview" subtitle="AI sales engine · live pipeline across all channels" />
 
