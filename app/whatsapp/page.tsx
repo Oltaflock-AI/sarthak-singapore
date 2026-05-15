@@ -4,7 +4,7 @@ import { useState, useMemo, useEffect } from "react";
 import { useLiveData, WaRow } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
-import { timeAgo, initials } from "@/lib/format";
+import { timeAgo, initials, fmtDateTime, fmtTime, fmtDateShort } from "@/lib/format";
 
 type KbBrochure = { id: string; name: string; brochure_url: string | null };
 
@@ -90,12 +90,23 @@ export default function WhatsAppPage() {
                 >
                   <div className="avatar sm">{initials(c.name)}</div>
                   <div style={{ minWidth: 0 }}>
-                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2 }}>{c.name}</div>
+                    <div style={{ fontWeight: 600, fontSize: 13, marginBottom: 2, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                      {c.name}
+                    </div>
+                    <div className="num" style={{
+                      fontSize: 10.5, color: "var(--gold-2)", letterSpacing: 0.3,
+                      marginBottom: 3, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis",
+                    }}>
+                      {c.number}
+                    </div>
                     <div style={{ fontSize: 11.5, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
                       {c.messages[0]?.text_in ?? c.messages[0]?.text_out ?? "—"}
                     </div>
                   </div>
-                  <div style={{ fontSize: 10, color: "var(--muted)", whiteSpace: "nowrap" }} className="num">{timeAgo(c.lastAt)}</div>
+                  <div style={{ display: "flex", flexDirection: "column", alignItems: "flex-end", gap: 2, whiteSpace: "nowrap" }}>
+                    <div style={{ fontSize: 10, color: "var(--muted)" }} className="num">{timeAgo(c.lastAt)}</div>
+                    <div style={{ fontSize: 9, color: "var(--muted)", opacity: 0.7 }} className="num">{fmtDateShort(c.lastAt)}</div>
+                  </div>
                 </button>
               ))
             )}
@@ -114,12 +125,34 @@ export default function WhatsAppPage() {
                 </div>
               </div>
               <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px", display: "flex", flexDirection: "column", gap: 14 }}>
-                {selected.messages.slice().reverse().map((m) => (
-                  <div key={m.id} className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-                    {m.text_in && <Bubble side="in" text={m.text_in} time={m.created_at} />}
-                    {m.text_out && <Bubble side="out" text={m.text_out} time={m.created_at} />}
-                  </div>
-                ))}
+                {(() => {
+                  const ordered = selected.messages.slice().reverse();
+                  const out: React.ReactNode[] = [];
+                  let lastDay = "";
+                  ordered.forEach((m) => {
+                    const day = fmtDateShort(m.created_at);
+                    if (day !== lastDay) {
+                      out.push(
+                        <div key={`day-${m.id}`} style={{
+                          alignSelf: "center", fontSize: 10.5, color: "var(--muted)",
+                          padding: "4px 12px", background: "var(--panel)",
+                          border: "1px solid var(--line)", borderRadius: 999,
+                          letterSpacing: 0.5, margin: "6px 0",
+                        }}>
+                          {day}
+                        </div>
+                      );
+                      lastDay = day;
+                    }
+                    out.push(
+                      <div key={m.id} className="fade-in" style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                        {m.text_in && <Bubble side="in" text={m.text_in} time={m.created_at} />}
+                        {m.text_out && <Bubble side="out" text={m.text_out} time={m.created_at} />}
+                      </div>
+                    );
+                  });
+                  return out;
+                })()}
               </div>
               <Composer to={selected.number} brochures={brochures} />
             </>
@@ -276,7 +309,13 @@ function Bubble({ side, text, time }: { side: "in" | "out"; text: string; time: 
           borderBottomLeftRadius: isOut ? 12 : 4,
           whiteSpace: "pre-wrap",
         }}>{text}</div>
-        <div style={{ fontSize: 10, color: "var(--muted)", textAlign: isOut ? "right" : "left" }} className="num">{timeAgo(time)}</div>
+        <div
+          style={{ fontSize: 10, color: "var(--muted)", textAlign: isOut ? "right" : "left" }}
+          className="num"
+          title={fmtDateTime(time)}
+        >
+          {fmtTime(time)} <span style={{ opacity: 0.55, marginLeft: 4 }}>· {timeAgo(time)}</span>
+        </div>
       </div>
     </div>
   );

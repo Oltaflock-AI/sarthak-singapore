@@ -37,3 +37,33 @@ export function initials(name: string | null | undefined): string {
   if (parts.length === 1) return parts[0][0].toUpperCase();
   return (parts[0][0] + parts[parts.length - 1][0]).toUpperCase();
 }
+
+export function fmtDateTime(ts: string | Date): string {
+  const d = typeof ts === "string" ? new Date(ts) : ts;
+  return d.toLocaleString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}
+
+export function fmtDateShort(ts: string | Date): string {
+  const d = typeof ts === "string" ? new Date(ts) : ts;
+  return d.toLocaleDateString("en-IN", {
+    day: "2-digit",
+    month: "short",
+    year: "numeric",
+  });
+}
+
+export function fmtTime(ts: string | Date): string {
+  const d = typeof ts === "string" ? new Date(ts) : ts;
+  return d.toLocaleTimeString("en-IN", {
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: true,
+  });
+}

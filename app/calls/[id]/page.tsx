@@ -212,6 +212,7 @@ export default function CallDetailPage() {
   const [call, setCall] = useState<CallRow | null>(null);
   const [loading, setLoading] = useState(true);
   const [copied, setCopied] = useState(false);
+  const [transcriptOpen, setTranscriptOpen] = useState(false);
 
   useEffect(() => {
     const fetchOne = async () => {
@@ -512,11 +513,61 @@ export default function CallDetailPage() {
         <Section
           title="Conversation"
           action={
-            <div style={{ fontSize: 11, color: "var(--muted)" }}>
-              {turns} message{turns === 1 ? "" : "s"}
-            </div>
+            <button
+              type="button"
+              onClick={() => setTranscriptOpen((v) => !v)}
+              style={{
+                padding: "5px 12px",
+                fontSize: 11,
+                fontWeight: 500,
+                background: transcriptOpen ? "var(--gold-soft)" : "var(--bg-2)",
+                color: transcriptOpen ? "var(--gold-2)" : "var(--text-2)",
+                border: `1px solid ${transcriptOpen ? "var(--gold-dim)" : "var(--line)"}`,
+                borderRadius: 5,
+                cursor: "pointer",
+                display: "flex",
+                alignItems: "center",
+                gap: 6,
+              }}
+            >
+              <span style={{ fontSize: 10 }}>{transcriptOpen ? "▼" : "▶"}</span>
+              {transcriptOpen ? "Hide" : "Show"} transcript · {turns} message{turns === 1 ? "" : "s"}
+            </button>
           }
         >
+          {!transcriptOpen ? (
+            <div
+              className="panel"
+              onClick={() => setTranscriptOpen(true)}
+              style={{
+                padding: "16px 22px", cursor: "pointer", display: "flex",
+                alignItems: "center", justifyContent: "space-between", gap: 12,
+                transition: "border-color 0.15s",
+              }}
+              onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--gold-dim)")}
+              onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--line)")}
+            >
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <div style={{
+                  width: 32, height: 32, borderRadius: 8,
+                  background: "rgba(201,168,90,0.12)",
+                  display: "flex", alignItems: "center", justifyContent: "center",
+                  color: "#c9a85a", fontSize: 13,
+                }}>
+                  💬
+                </div>
+                <div>
+                  <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>
+                    {turns} message{turns === 1 ? "" : "s"} in this conversation
+                  </div>
+                  <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
+                    Click to expand the full transcript
+                  </div>
+                </div>
+              </div>
+              <span style={{ fontSize: 11, color: "var(--gold-2)" }}>Expand →</span>
+            </div>
+          ) : (
           <div className="panel" style={{ padding: "22px 24px" }}>
             {call.transcript.map((t, i) => {
               const isAgent = t.side === "agent" || /agent|bot|assistant/i.test(t.speaker);
@@ -554,6 +605,7 @@ export default function CallDetailPage() {
               );
             })}
           </div>
+          )}
         </Section>
       )}
     </div>

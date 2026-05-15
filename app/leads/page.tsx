@@ -5,7 +5,7 @@ import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ScoreBadge } from "@/components/ScoreBadge";
-import { timeAgo, initials, fmtDuration } from "@/lib/format";
+import { timeAgo, initials, fmtDuration, fmtDateTime } from "@/lib/format";
 import { supabase } from "@/lib/data";
 
 type Lead = {
@@ -250,6 +250,8 @@ function StatusPill({ status }: { status: string }) {
   );
 }
 
+type TranscriptTurn = { side?: string; speaker?: string; text: string; time?: string };
+
 type CallSlim = {
   id: string;
   call_id: string | null;
@@ -260,7 +262,25 @@ type CallSlim = {
   score_label: string | null;
   created_at: string;
   analysis: Record<string, unknown> | null;
+  transcript: TranscriptTurn[] | null;
 };
+
+const POS_WORDS = /\b(haan|han|yes|yeah|sure|theek|sahi|ok|okay|booked|done|agreed|samajh|right|absolutely|definitely|interested|like|love|good|great)\b/i;
+const NEG_WORDS = /\b(nahi|nahin|no|not|busy|cut|disconnect|wrong|bye|later|cancel|hate|don'?t)\b/i;
+
+function computeCallSentiment(transcript: TranscriptTurn[] | null) {
+  if (!transcript || transcript.length === 0) return { label: "—", color: "var(--muted)", emoji: "•", pos: 0, neg: 0 };
+  let pos = 0, neg = 0;
+  for (const t of transcript) {
+    if (t.side !== "user" && t.speaker !== "user") continue;
+    if (POS_WORDS.test(t.text)) pos++;
+    if (NEG_WORDS.test(t.text)) neg++;
+  }
+  if (pos + neg === 0) return { label: "Neutral", color: "var(--muted)", emoji: "•", pos, neg };
+  if (pos > neg * 1.5) return { label: "Positive", color: "#7dc77d", emoji: "▲", pos, neg };
+  if (neg > pos * 1.5) return { label: "Negative", color: "#c97d7d", emoji: "▼", pos, neg };
+  return { label: "Mixed", color: "#c9a85a", emoji: "◆", pos, neg };
+}
 
 function humanize(v: unknown): string {
   if (v === null || v === undefined) return "—";
@@ -308,7 +328,7 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
     const phoneClean = lead.phone.replace(/^\+/, "");
     supabase
       .from("calls")
-      .select("id,call_id,duration_seconds,outcome,summary,lead_score,score_label,created_at,analysis")
+      .select("id,call_id,duration_seconds,outcome,summary,lead_score,score_label,created_at,analysis,transcript")
       .or(`lead_phone.eq.+${phoneClean},lead_phone.eq.${phoneClean}`)
       .order("created_at", { ascending: false })
       .then(({ data }) => {
@@ -443,6 +463,9 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
               {calls.map((c) => {
                 const a = (c.analysis ?? {}) as Record<string, unknown>;
                 const siteVisit = a.site_visit_booked === true;
+                const sent = computeCallSentiment(c.transcript);
+                const motivation = c.lead_score ?? 0;
+                const motivationColor = motivation >= 80 ? "#7dc77d" : motivation >= 60 ? "#c9a85a" : motivation > 0 ? "#c97d7d" : "var(--muted)";
                 return (
                   <Link
                     key={c.id}
@@ -455,8 +478,8 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
                     onMouseEnter={(e) => (e.currentTarget.style.borderColor = "var(--gold-dim)")}
                     onMouseLeave={(e) => (e.currentTarget.style.borderColor = "var(--line)")}
                   >
-                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 6 }}>
-                      <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 8, gap: 8, flexWrap: "wrap" }}>
+                      <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
                         <ScoreBadge score={c.lead_score} />
                         <span style={{ fontSize: 11.5, color: "var(--muted)", textTransform: "capitalize" }}>
                           {c.outcome ?? "completed"} · {fmtDuration(c.duration_seconds ?? 0)}
@@ -469,8 +492,41 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
                           }}>✓ Site visit</span>
                         )}
                       </div>
-                      <span style={{ fontSize: 11, color: "var(--muted)" }}>{timeAgo(c.created_at)}</span>
+                      <span style={{ fontSize: 11, color: "var(--muted)" }} className="num">
+                        {fmtDateTime(c.created_at)}
+                      </span>
                     </div>
+
+                    <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(130px, 1fr))", gap: 8, marginBottom: 8 }}>
+                      <div style={{
+                        padding: "8px 10px", borderRadius: 6,
+                        background: "var(--panel)", border: "1px solid var(--line)",
+                      }}>
+                        <div style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
+                          Motivation Score
+                        </div>
+                        <div style={{ fontSize: 16, fontWeight: 700, color: motivationColor, marginTop: 3, letterSpacing: -0.3 }}>
+                          {motivation > 0 ? `${motivation} / 100` : "—"}
+                        </div>
+                      </div>
+                      <div style={{
+                        padding: "8px 10px", borderRadius: 6,
+                        background: "var(--panel)", border: "1px solid var(--line)",
+                      }}>
+                        <div style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
+                          Sentiment
+                        </div>
+                        <div style={{ fontSize: 13, fontWeight: 600, color: sent.color, marginTop: 4 }}>
+                          {sent.emoji} {sent.label}
+                          {(sent.pos > 0 || sent.neg > 0) && (
+                            <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 6, fontWeight: 400 }}>
+                              +{sent.pos}/-{sent.neg}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+                    </div>
+
                     {c.summary && (
                       <div style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.5, marginTop: 4 }}>
                         {c.summary}
@@ -506,7 +562,7 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
                           fontSize: 12.5, lineHeight: 1.5,
                         }}>
                           <div style={{ fontSize: 9.5, color: "var(--muted)", marginBottom: 3, fontWeight: 500 }}>
-                            {humanize(lead.name) !== "—" ? humanize(lead.name) : "Lead"} · {timeAgo(m.created_at)}
+                            {humanize(lead.name) !== "—" ? humanize(lead.name) : "Lead"} · {fmtDateTime(m.created_at)}
                           </div>
                           {m.text_in}
                         </div>
