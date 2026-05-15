@@ -42,6 +42,45 @@ export function CallCard({ call, defaultOpen = false }: Props) {
           → {call.outcome}
         </div>
       )}
+      {(() => {
+        const a = (call.analysis ?? {}) as Record<string, unknown>;
+        const chips: { label: string; value: string }[] = [];
+        const get = (k: string) => {
+          const v = a[k];
+          return typeof v === "string" && v.trim() && v !== "unclear" ? v : null;
+        };
+        const intent = get("intent");
+        const budget = get("budget_range");
+        const timeline = get("timeline");
+        const next = get("next_action");
+        const nri = get("nri_status");
+        const siteVisit = a["site_visit_booked"];
+        if (intent) chips.push({ label: "intent", value: intent });
+        if (budget) chips.push({ label: "budget", value: budget });
+        if (timeline) chips.push({ label: "timeline", value: timeline });
+        if (nri) chips.push({ label: "nri", value: nri });
+        if (siteVisit === true) chips.push({ label: "site visit", value: "booked" });
+        if (next) chips.push({ label: "next", value: next });
+        if (chips.length === 0) return null;
+        return (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+            {chips.map((c) => (
+              <span key={c.label} style={{
+                fontSize: 10.5, padding: "3px 8px", borderRadius: 5,
+                background: "var(--bg-2)", border: "1px solid var(--line)",
+                color: "var(--text-2)",
+              }}>
+                <span style={{ color: "var(--muted)" }}>{c.label}:</span> {c.value}
+              </span>
+            ))}
+          </div>
+        );
+      })()}
+      {call.summary && (
+        <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 10, lineHeight: 1.45, fontStyle: "italic" }}>
+          “{call.summary}”
+        </div>
+      )}
       {open && call.transcript && call.transcript.length > 0 && (
         <div
           className="fade-in"

@@ -19,6 +19,9 @@ export interface CallRow {
   score_label: string | null;
   duration_seconds: number | null;
   outcome: string | null;
+  summary: string | null;
+  language: string | null;
+  analysis: Record<string, unknown> | null;
   transcript: { speaker: string; time: string; text: string; side: string }[] | null;
   created_at: string;
 }
