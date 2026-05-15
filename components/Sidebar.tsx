@@ -55,7 +55,9 @@ export function Sidebar() {
   return (
     <aside className="sidebar">
       <div className="sb-brand">
-        <div className="sb-mark">S</div>
+        <div className="sb-mark" style={{ overflow: "hidden", padding: 0 }}>
+          <img src="/logo.jpg" alt="Sarthak" style={{ width: "100%", height: "100%", objectFit: "cover", display: "block" }} />
+        </div>
         <div className="sb-brand-text">
           <span className="name">Sarthak Singapore</span>
           <span className="sub">AI Sales Engine</span>

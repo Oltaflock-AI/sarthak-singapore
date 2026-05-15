@@ -1,21 +1,39 @@
 "use client";
 
-import { useState } from "react";
+import Link from "next/link";
 import { CallRow } from "@/lib/data";
 import { ScoreBadge } from "./ScoreBadge";
 import { timeAgo, fmtDuration } from "@/lib/format";
 
 interface Props {
   call: CallRow;
-  defaultOpen?: boolean;
 }
 
-export function CallCard({ call, defaultOpen = false }: Props) {
-  const [open, setOpen] = useState(defaultOpen);
+export function CallCard({ call }: Props) {
+  const a = (call.analysis ?? {}) as Record<string, unknown>;
+  const chips: { label: string; value: string }[] = [];
+  const get = (k: string) => {
+    const v = a[k];
+    return typeof v === "string" && v.trim() && v !== "unclear" ? v : null;
+  };
+  const intent = get("intent");
+  const budget = get("budget_range");
+  const timeline = get("timeline");
+  const next = get("next_action");
+  const siteVisit = a["site_visit_booked"];
+  if (intent) chips.push({ label: "intent", value: intent });
+  if (budget) chips.push({ label: "budget", value: budget });
+  if (timeline) chips.push({ label: "timeline", value: timeline });
+  if (siteVisit === true) chips.push({ label: "site visit", value: "booked" });
+  if (next) chips.push({ label: "next", value: next });
+
   return (
-    <div
-      onClick={() => setOpen((o) => !o)}
+    <Link
+      href={`/calls/${call.id}`}
       style={{
+        display: "block",
+        textDecoration: "none",
+        color: "inherit",
         background: "var(--panel-2)",
         border: "1px solid var(--line)",
         borderRadius: 8,
@@ -42,68 +60,24 @@ export function CallCard({ call, defaultOpen = false }: Props) {
           → {call.outcome}
         </div>
       )}
-      {(() => {
-        const a = (call.analysis ?? {}) as Record<string, unknown>;
-        const chips: { label: string; value: string }[] = [];
-        const get = (k: string) => {
-          const v = a[k];
-          return typeof v === "string" && v.trim() && v !== "unclear" ? v : null;
-        };
-        const intent = get("intent");
-        const budget = get("budget_range");
-        const timeline = get("timeline");
-        const next = get("next_action");
-        const nri = get("nri_status");
-        const siteVisit = a["site_visit_booked"];
-        if (intent) chips.push({ label: "intent", value: intent });
-        if (budget) chips.push({ label: "budget", value: budget });
-        if (timeline) chips.push({ label: "timeline", value: timeline });
-        if (nri) chips.push({ label: "nri", value: nri });
-        if (siteVisit === true) chips.push({ label: "site visit", value: "booked" });
-        if (next) chips.push({ label: "next", value: next });
-        if (chips.length === 0) return null;
-        return (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
-            {chips.map((c) => (
-              <span key={c.label} style={{
-                fontSize: 10.5, padding: "3px 8px", borderRadius: 5,
-                background: "var(--bg-2)", border: "1px solid var(--line)",
-                color: "var(--text-2)",
-              }}>
-                <span style={{ color: "var(--muted)" }}>{c.label}:</span> {c.value}
-              </span>
-            ))}
-          </div>
-        );
-      })()}
-      {call.summary && (
-        <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 10, lineHeight: 1.45, fontStyle: "italic" }}>
-          “{call.summary}”
-        </div>
-      )}
-      {open && call.transcript && call.transcript.length > 0 && (
-        <div
-          className="fade-in"
-          style={{
-            marginTop: 12,
-            padding: 14,
-            background: "var(--bg-2)",
-            borderRadius: 6,
-            border: "1px solid var(--line)",
-          }}
-          onClick={(e) => e.stopPropagation()}
-        >
-          {call.transcript.map((t, i) => (
-            <div key={i} style={{ marginBottom: i === call.transcript!.length - 1 ? 0 : 12, fontSize: 12.5, lineHeight: 1.55 }}>
-              <span style={{ fontWeight: 600, color: t.side === "ai" ? "var(--gold)" : "var(--text)", fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase" }}>
-                {t.speaker}
-              </span>
-              <span style={{ fontSize: 10, color: "var(--muted)", marginLeft: 8 }}>{t.time}</span>
-              <div style={{ marginTop: 2, color: "var(--text-2)" }}>{t.text}</div>
-            </div>
+      {chips.length > 0 && (
+        <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginTop: 10 }}>
+          {chips.map((c) => (
+            <span key={c.label} style={{
+              fontSize: 10.5, padding: "3px 8px", borderRadius: 5,
+              background: "var(--bg-2)", border: "1px solid var(--line)",
+              color: "var(--text-2)",
+            }}>
+              <span style={{ color: "var(--muted)" }}>{c.label}:</span> {c.value}
+            </span>
           ))}
         </div>
       )}
-    </div>
+      {call.summary && (
+        <div style={{ fontSize: 12, color: "var(--text-2)", marginTop: 10, lineHeight: 1.45, fontStyle: "italic" }}>
+          &ldquo;{call.summary}&rdquo;
+        </div>
+      )}
+    </Link>
   );
 }
