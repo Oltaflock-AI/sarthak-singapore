@@ -154,15 +154,38 @@ async function handleCrmSideEffects(
   };
   await supabase.from("leads").upsert(merged, { onConflict: "phone" });
 
-  // Book site visit if requested
+  // Book site visit if requested — dedupe so repeat mentions don't create duplicates
   if (e.site_visit_request) {
-    await supabase.from("site_visits").insert({
-      lead_phone: phone,
-      lead_name: mergedName,
-      project: e.site_visit_request.project ?? mergedProject,
-      scheduled_for_text: e.site_visit_request.when_text,
-      status: "pending",
-    });
+    const wantedProject = e.site_visit_request.project ?? mergedProject;
+    const { data: existingVisit } = await supabase
+      .from("site_visits")
+      .select("id,scheduled_for_text,status")
+      .eq("lead_phone", phone)
+      .in("status", ["pending", "confirmed"])
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+
+    if (!existingVisit) {
+      await supabase.from("site_visits").insert({
+        lead_phone: phone,
+        lead_name: mergedName,
+        project: wantedProject,
+        scheduled_for_text: e.site_visit_request.when_text,
+        status: "pending",
+      });
+    } else if (
+      e.site_visit_request.when_text &&
+      e.site_visit_request.when_text !== existingVisit.scheduled_for_text
+    ) {
+      await supabase
+        .from("site_visits")
+        .update({
+          project: wantedProject,
+          scheduled_for_text: e.site_visit_request.when_text,
+        })
+        .eq("id", existingVisit.id);
+    }
   }
 
   // 3) Auto-send brochure if requested AND a matching project has brochure_url
