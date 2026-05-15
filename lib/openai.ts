@@ -212,7 +212,7 @@ export async function callPriya(
       ...history,
       { role: "user", content: userMessage },
     ],
-    max_tokens: 200,
+    max_tokens: 400,
     temperature: 0.6,
   });
   return response.choices[0].message.content ?? "I'm not available right now. Please try again in a moment.";
@@ -254,7 +254,13 @@ BUTTON TITLE LENGTH GUIDE (count carefully):
 
 WHEN TO INCLUDE BUTTONS:
 ✅ Yes — first contact (yes/later/sales), property type, BHK choice, purpose, budget tiers, timeline, recommendation CTAs, site visit dates, site visit times, post-visit check-in, re-engagement nudges, NRI detection, human handoff, FAQ reply CTAs
-❌ No — asking for name, asking for a specific custom budget amount, asking for a custom date preference, open-ended questions about requirements`;
+❌ No — asking for name, asking for a specific custom budget amount, asking for a custom date preference, open-ended questions about requirements
+
+ALWAYS-REPLY RULE (critical):
+- Every user message MUST get a substantive English reply in "text", even if the user asks something off-script, unexpected, or unrelated to the buttons. Never return empty or near-empty text.
+- If the user asks a free-form question (anything outside the button choices), answer it directly using the KB. Buttons are OPTIONAL — omit them when a free-text answer is what's needed.
+- If you don't know the answer, reply: "Let me check that with our sales team and get back to you." — still in "text", no buttons.
+- Never refuse to reply or send only buttons with no message body.`;
 
 export async function callPriyaRich(
   systemPrompt: string,
@@ -270,7 +276,7 @@ export async function callPriyaRich(
         ...history,
         { role: "user", content: userMessage },
       ],
-      max_tokens: 300,
+      max_tokens: 600,
       temperature: 0.6,
     });
     const raw = response.choices[0].message.content ?? "{}";
