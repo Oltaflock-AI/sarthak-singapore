@@ -290,39 +290,6 @@ export default function Overview() {
         </div>
       </div>
 
-      {/* Live activity */}
-      <div className="panel">
-        <div className="panel-head">
-          <div className="panel-title">Live Activity</div>
-          <div className="panel-sub">WhatsApp + voice + site-visit bookings · last 14 events</div>
-        </div>
-        <div className="panel-body flush">
-          {feed.length === 0 ? (
-            <EmptyState title="No activity yet" hint="Send a WhatsApp message to +1 814-404-5578 to see it land here within seconds." />
-          ) : (
-            <div className="row-stripe">
-              {feed.map((item) => (
-                <div key={item.id} style={{ display: "grid", gridTemplateColumns: "auto 1fr auto auto", gap: 14, alignItems: "center", padding: "14px 20px" }}>
-                  <div className="avatar sm">{initials(item.name)}</div>
-                  <div style={{ minWidth: 0 }}>
-                    <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-                      <span style={{ fontWeight: 600, fontSize: 13 }}>{item.name}</span>
-                      <span style={{ color: "var(--gold-dim)", display: "inline-flex" }}>
-                        {item.kind === "visit" ? ICONS.visits : item.kind === "wa" ? ICONS.whatsapp : ICONS.voice}
-                      </span>
-                    </div>
-                    <div style={{ fontSize: 12, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis", marginTop: 2 }}>
-                      {item.preview}
-                    </div>
-                  </div>
-                  {item.score != null && <ScoreBadge score={item.score} />}
-                  <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap" }} className="num">{timeAgo(item.when)}</div>
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      </div>
     </>
   );
 }
