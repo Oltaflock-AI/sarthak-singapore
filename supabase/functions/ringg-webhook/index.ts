@@ -107,91 +107,116 @@ Deno.serve(async (req) => {
 
   console.log("[ringg-webhook] received", JSON.stringify(body));
 
-  const call_id = pick<string>(body, [
-    "call_id", "callId", "id", "data.call_id", "data.id", "conversation_id",
-  ]);
+  const call_id = pick<string>(body, ["call_id", "callId", "id", "data.call_id"]);
+  if (!call_id) {
+    return new Response(
+      JSON.stringify({ ok: false, error: "missing call_id" }),
+      { status: 400, headers: { ...corsHeaders, "Content-Type": "application/json" } },
+    );
+  }
+
+  const event_type = pick<string>(body, ["event_type"]);
+
+  // Ringg emits 6 events per call. Each carries different slices of data.
+  // client_analysis / platform_analysis live either at top-level (all_processing_completed)
+  // or under analysis_data (client_analysis_completed / platform_analysis_completed).
+  const client_analysis = (pick<Record<string, unknown>>(body, [
+    "client_analysis",
+    event_type === "client_analysis_completed" ? "analysis_data" : "__nope__",
+  ]) ?? {}) as Record<string, unknown>;
+
+  const platform_analysis = (pick<Record<string, unknown>>(body, [
+    "platform_analysis",
+    event_type === "platform_analysis_completed" ? "analysis_data" : "__nope__",
+  ]) ?? {}) as Record<string, unknown>;
+
+  const custom_args = (pick<Record<string, unknown>>(body, ["custom_args_values"]) ?? {}) as Record<string, unknown>;
 
   const lead_name = pick<string>(body, [
-    "custom_analysis_data.lead_name", "analysis.lead_name", "analytics.lead_name",
-    "lead_name", "name", "customer_name", "contact_name", "callee_name",
-    "metadata.lead_name", "metadata.name", "variables.name", "data.lead_name",
-    "custom_variables.name", "custom_variables.lead_name", "custom_variables.callee_name",
-  ]);
+    "client_analysis.callee_name", "custom_args_values.callee_name",
+  ]) ?? (client_analysis.callee_name as string | undefined) ?? null;
 
   const lead_phone = pick<string>(body, [
-    "lead_phone", "phone", "phone_number", "to", "to_number", "customer_phone",
-    "customer_number", "called_number", "callee_number", "mobile_number",
-    "metadata.phone", "variables.phone", "data.phone",
-    "custom_variables.phone", "custom_variables.lead_phone", "custom_variables.mobile_number",
-  ]);
+    "to_number", "custom_args_values.mobile_number",
+  ]) ?? null;
 
-  const project = pick<string>(body, [
-    "custom_analysis_data.project_interest", "analysis.project_interest",
-    "project", "project_interest",
-    "metadata.project", "variables.project", "data.project",
-    "custom_variables.project_interest",
+  const project_raw = pick<string>(body, [
+    "client_analysis.project_interest", "custom_args_values.project_interest",
   ]);
+  const project = project_raw ? String(project_raw) : null;
 
-  const source = pick<string>(body, [
-    "source", "metadata.source", "variables.source", "data.source", "channel",
-  ]);
-
-  const lead_score_raw = pick<number | string>(body, [
-    "custom_analysis_data.lead_score", "analysis.lead_score", "analytics.lead_score",
-    "lead_score", "score", "metadata.score", "analytics.score", "data.score",
-  ]);
-  const lead_score_num = lead_score_raw == null ? null : Number(lead_score_raw);
-  const lead_score = Number.isFinite(lead_score_num as number) ? lead_score_num : null;
-
-  const duration_raw = pick<number | string>(body, [
-    "call_duration", "duration_seconds", "duration", "data.duration",
-  ]);
+  const duration_raw = pick<number | string>(body, ["call_duration", "recording_duration", "duration"]);
   const duration_num = duration_raw == null ? null : Number(duration_raw);
   const duration_seconds = Number.isFinite(duration_num as number) ? Math.round(duration_num as number) : null;
 
-  const outcome = pick<string>(body, [
-    "outcome", "disposition", "result", "status", "call_status", "data.outcome",
-  ]);
+  const outcome = pick<string>(body, ["status", "outcome"]);
 
-  const rawTranscript = pick(body, [
-    "transcript", "transcripts", "messages", "conversation", "data.transcript",
-  ]);
+  const rawTranscript = pick(body, ["transcript", "messages", "conversation"]);
   const transcript = normalizeTranscript(rawTranscript);
 
   const summary = pick<string>(body, [
-    "custom_analysis_data.call_summary", "analysis.call_summary",
-    "summary", "call_summary", "data.summary",
+    "client_analysis.call_summary", "platform_analysis.summary",
   ]);
 
-  const language = pick<string>(body, [
-    "custom_analysis_data.language_spoken", "analysis.language_spoken",
-    "language", "language_spoken",
-  ]);
+  const language = pick<string>(body, ["client_analysis.language_spoken"]);
 
-  const analysisRaw = pick<Record<string, unknown>>(body, [
-    "custom_analysis_data", "analysis", "analytics",
-  ]);
-  const analysis = analysisRaw && typeof analysisRaw === "object" ? analysisRaw : null;
+  const recording_url = pick<string>(body, ["recording_url"]);
 
-  const row: Record<string, unknown> = {
-    call_id,
-    lead_name,
-    lead_phone,
-    project,
-    source,
-    lead_score,
-    score_label: scoreLabel(lead_score),
-    duration_seconds,
-    outcome,
-    summary,
-    language,
-    transcript,
-    analysis,
+  // Heuristic lead_score (Ringg doesn't return one)
+  let lead_score: number | null = null;
+  if (Object.keys(client_analysis).length > 0 || Object.keys(platform_analysis).length > 0) {
+    let s = 30;
+    if (client_analysis.site_visit_booked === true) s += 40;
+    if (platform_analysis.classification === "site_visit_booked") s += 10;
+    const tl = String(client_analysis.timeline ?? "").toLowerCase();
+    if (tl.includes("immediate") || tl.includes("month")) s += 15;
+    if (typeof client_analysis.budget_range === "string" && client_analysis.budget_range.trim()) s += 10;
+    const intent = String(client_analysis.intent ?? "").toLowerCase();
+    if (intent === "site_visit" || intent === "buying" || intent === "purchase") s += 5;
+    const next = String(client_analysis.next_action ?? "").toLowerCase();
+    if (next.includes("hot_transfer") || next.includes("site_visit")) s += 5;
+    lead_score = Math.min(100, s);
+  }
+
+  // Merged analysis blob — combines client + platform + identifiers + recording
+  const analysis: Record<string, unknown> = {
+    ...(Object.keys(client_analysis).length ? client_analysis : {}),
+    ...(Object.keys(platform_analysis).length
+      ? {
+          platform_summary: platform_analysis.summary,
+          classification: platform_analysis.classification,
+          key_points: platform_analysis.key_points,
+          action_items: platform_analysis.action_items,
+        }
+      : {}),
+    ...(recording_url ? { recording_url } : {}),
+    custom_args: Object.keys(custom_args).length ? custom_args : undefined,
   };
+  const hasAnalysis = Object.values(analysis).some((v) => v !== undefined && v !== null);
 
-  const { error } = call_id
-    ? await supabase.from("calls").upsert(row, { onConflict: "call_id" })
-    : await supabase.from("calls").insert(row);
+  // Build row including ONLY non-null fields so later events don't nuke earlier ones.
+  const row: Record<string, unknown> = { call_id, source: "ringg" };
+  const set = (k: string, v: unknown) => {
+    if (v === null || v === undefined) return;
+    if (typeof v === "string" && v.trim() === "") return;
+    if (Array.isArray(v) && v.length === 0) return;
+    row[k] = v;
+  };
+  set("lead_name", lead_name);
+  set("lead_phone", lead_phone);
+  set("project", project);
+  set("duration_seconds", duration_seconds);
+  set("outcome", outcome);
+  set("transcript", transcript);
+  set("summary", summary);
+  set("language", language);
+  if (lead_score != null) {
+    row.lead_score = lead_score;
+    row.score_label = scoreLabel(lead_score);
+  }
+  if (hasAnalysis) row.analysis = analysis;
+
+  const { error } = await supabase.from("calls").upsert(row, { onConflict: "call_id" });
 
   if (error) {
     console.error("[ringg-webhook] supabase error", error, "row=", row);

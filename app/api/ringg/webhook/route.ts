@@ -1,64 +1,123 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 
+export const runtime = "nodejs";
+export const dynamic = "force-dynamic";
+
+type TranscriptTurn = { speaker: string; time: string; text: string; side: string };
+
+function scoreLabel(score: number | null): string | null {
+  if (score == null) return null;
+  if (score >= 80) return "HOT";
+  if (score >= 60) return "WARM";
+  return "COLD";
+}
+
+function normalizeTranscript(raw: unknown): TranscriptTurn[] {
+  if (!raw) return [];
+  if (typeof raw === "string") {
+    return raw.split(/\r?\n/).filter(Boolean).map((line) => {
+      const m = line.match(/^\s*(agent|user|assistant|caller|bot|customer)\s*[:\-]\s*(.+)$/i);
+      const speaker = m ? m[1] : "speaker";
+      const text = m ? m[2] : line;
+      const side = /agent|assistant|bot/i.test(speaker) ? "agent" : "user";
+      return { speaker, time: "", text, side };
+    });
+  }
+  if (Array.isArray(raw)) {
+    return raw.map((t: any) => {
+      const speaker = String(t.speaker ?? t.role ?? t.from ?? "speaker");
+      const text = String(t.text ?? t.message ?? t.content ?? "");
+      const time = String(t.time ?? t.timestamp ?? "");
+      const side = /agent|assistant|bot/i.test(speaker) ? "agent" : "user";
+      return { speaker, time, text, side };
+    });
+  }
+  return [];
+}
+
+function pick<T = any>(obj: any, keys: string[]): T | null {
+  for (const k of keys) {
+    const v = k.split(".").reduce((o, p) => (o == null ? o : o[p]), obj);
+    if (v !== undefined && v !== null && v !== "") return v as T;
+  }
+  return null;
+}
+
 export async function POST(req: NextRequest) {
-  let body: Record<string, unknown>;
+  let body: any;
   try {
     body = await req.json();
   } catch {
-    return NextResponse.json({ error: "Invalid JSON" }, { status: 400 });
+    return NextResponse.json({ ok: false, error: "invalid json" }, { status: 400 });
   }
 
-  // Ringg.ai sends different event types — only persist completed calls
-  const event = (body.event_type as string) ?? (body.event as string) ?? "";
-  if (!["call_completed", "all_processing_completed"].includes(event)) {
-    return NextResponse.json({ received: true });
-  }
+  const call_id = pick<string>(body, [
+    "call_id", "callId", "id", "data.call_id", "data.id", "conversation_id",
+  ]);
 
-  const callId = (body.call_id ?? body.id) as string | undefined;
-  if (!callId) return NextResponse.json({ received: true });
+  const lead_name = pick<string>(body, [
+    "lead_name", "name", "customer_name", "contact_name",
+    "metadata.lead_name", "metadata.name", "variables.name", "data.lead_name",
+  ]);
 
-  // Map Ringg.ai payload → our schema
-  const score = Number(body.lead_score ?? body.score ?? 0);
-  const scoreLabel =
-    score >= 80 ? "HOT" : score >= 60 ? "WARM" : "COLD";
+  const lead_phone = pick<string>(body, [
+    "lead_phone", "phone", "phone_number", "to", "to_number", "customer_phone",
+    "metadata.phone", "variables.phone", "data.phone",
+  ]);
 
-  const durationRaw = body.duration_seconds ?? body.duration ?? 0;
-  const durationSeconds = typeof durationRaw === "string"
-    ? parseInt(durationRaw, 10)
-    : Number(durationRaw);
+  const project = pick<string>(body, [
+    "project", "metadata.project", "variables.project", "data.project",
+  ]);
 
-  // Normalise transcript array — each item needs speaker, time, text, side
-  const rawTranscript = Array.isArray(body.transcript) ? body.transcript : [];
-  const transcript = rawTranscript.map((t: Record<string, unknown>) => ({
-    speaker: t.speaker === "agent" ? "Priya (AI)" : String(t.speaker ?? "Buyer"),
-    time: t.timestamp ?? t.time ?? "00:00",
-    text: t.text ?? t.content ?? "",
-    side: t.speaker === "agent" ? "ai" : "user",
-  }));
+  const source = pick<string>(body, [
+    "source", "metadata.source", "variables.source", "data.source", "channel",
+  ]);
+
+  const lead_score_raw = pick<number | string>(body, [
+    "lead_score", "score", "metadata.score", "analytics.score", "data.score",
+  ]);
+  const lead_score = lead_score_raw == null ? null : Number(lead_score_raw);
+
+  const duration_raw = pick<number | string>(body, [
+    "duration_seconds", "duration", "call_duration", "data.duration",
+  ]);
+  const duration_seconds = duration_raw == null ? null : Math.round(Number(duration_raw));
+
+  const outcome = pick<string>(body, [
+    "outcome", "disposition", "result", "status", "call_status", "data.outcome",
+  ]);
+
+  const rawTranscript = pick(body, [
+    "transcript", "transcripts", "messages", "conversation", "data.transcript",
+  ]);
+  const transcript = normalizeTranscript(rawTranscript);
 
   const row = {
-    call_id: callId,
-    lead_name: body.lead_name ?? body.name ?? body.contact_name ?? null,
-    lead_phone: body.lead_phone ?? body.phone ?? body.to ?? null,
-    project: body.project ?? (body.custom_args_values as Record<string, unknown>)?.project ?? null,
-    source: body.source ?? (body.custom_args_values as Record<string, unknown>)?.source ?? null,
-    lead_score: score,
-    score_label: scoreLabel,
-    duration_seconds: durationSeconds,
-    outcome: body.outcome ?? body.call_disposition ?? null,
+    call_id,
+    lead_name,
+    lead_phone,
+    project,
+    source,
+    lead_score: Number.isFinite(lead_score as number) ? lead_score : null,
+    score_label: scoreLabel(Number.isFinite(lead_score as number) ? (lead_score as number) : null),
+    duration_seconds: Number.isFinite(duration_seconds as number) ? duration_seconds : null,
+    outcome,
     transcript,
   };
 
-  // Upsert — deduplicate on call_id
-  const { error } = await supabase
-    .from("calls")
-    .upsert(row, { onConflict: "call_id" });
+  const { error } = call_id
+    ? await supabase.from("calls").upsert(row, { onConflict: "call_id" })
+    : await supabase.from("calls").insert(row);
 
   if (error) {
-    console.error("Supabase upsert error:", error);
-    return NextResponse.json({ error: "DB error" }, { status: 500 });
+    console.error("[ringg webhook] supabase error", error, "row=", row);
+    return NextResponse.json({ ok: false, error: error.message }, { status: 500 });
   }
 
-  return NextResponse.json({ received: true });
+  return NextResponse.json({ ok: true, call_id });
+}
+
+export async function GET() {
+  return NextResponse.json({ ok: true, service: "ringg-webhook" });
 }

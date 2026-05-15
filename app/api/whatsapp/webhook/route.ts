@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getPriyaReply } from "@/lib/openai";
+import { buildSystemPrompt, callPriyaRich, openai, extractLeadData, type ExtractedLead } from "@/lib/openai";
 
 const PHONE_NUMBER_ID = process.env.META_PHONE_NUMBER_ID!;
 const ACCESS_TOKEN = process.env.META_ACCESS_TOKEN!;
@@ -21,9 +21,12 @@ export async function GET(req: NextRequest) {
 
 // ─── Incoming messages ───────────────────────────────────────────────────────
 export async function POST(req: NextRequest) {
-  // Always return 200 immediately — Meta will retry if you don't
   const body = await req.json().catch(() => null);
-  processMessage(body).catch(console.error);
+  try {
+    await processMessage(body);
+  } catch (err) {
+    console.error("processMessage failed:", err);
+  }
   return NextResponse.json({ status: "ok" });
 }
 
@@ -39,34 +42,213 @@ async function processMessage(body: Record<string, unknown> | null) {
 
   const msg = messages[0];
   const msgType = msg.type as string;
-  if (msgType !== "text") return; // only handle text for now
-
   const fromNumber = msg.from as string;
-  const waId = msg.id as string;
-  const textBody = (msg.text as Record<string, unknown>)?.body as string ?? "";
+
+  let textBody = "";
+  if (msgType === "text") {
+    textBody = (msg.text as Record<string, unknown>)?.body as string ?? "";
+  } else if (msgType === "interactive") {
+    const interactive = msg.interactive as Record<string, unknown> | undefined;
+    const buttonReply = interactive?.button_reply as { id?: string; title?: string } | undefined;
+    const listReply = interactive?.list_reply as { id?: string; title?: string } | undefined;
+    textBody = (buttonReply?.title ?? listReply?.title ?? "").toString();
+  } else if (msgType === "audio" || msgType === "voice") {
+    const audio = msg[msgType] as Record<string, unknown> | undefined;
+    const mediaId = audio?.id as string | undefined;
+    if (mediaId) {
+      textBody = await transcribeWhatsAppAudio(mediaId).catch(() => "");
+    }
+    if (!textBody) {
+      await sendWhatsAppMessage(fromNumber, "Voice note samajh nahi aaya. Thoda text mein bhejo please?");
+      return;
+    }
+  } else {
+    return; // ignore unsupported types (images, docs, etc. — for now)
+  }
 
   const contacts = value?.contacts as Record<string, unknown>[] | undefined;
   const name = (contacts?.[0]?.profile as Record<string, unknown>)?.name as string ?? fromNumber;
 
-  // Generate Priya's reply
-  const reply = await getPriyaReply(textBody);
+  // Parallel: build KB-injected system prompt AND fetch history
+  const [systemPrompt, priorTurnsRes] = await Promise.all([
+    buildSystemPrompt(),
+    supabase
+      .from("wa_messages")
+      .select("text_in,text_out,created_at")
+      .eq("from_number", fromNumber)
+      .order("created_at", { ascending: false })
+      .limit(6),
+  ]);
 
-  // Send reply via Meta Graph API
-  await sendWhatsAppMessage(fromNumber, reply);
+  const history = (priorTurnsRes.data ?? [])
+    .reverse()
+    .flatMap((r) => {
+      const turns: { role: "user" | "assistant"; content: string }[] = [];
+      if (r.text_in) turns.push({ role: "user", content: r.text_in });
+      if (r.text_out) turns.push({ role: "assistant", content: r.text_out });
+      return turns;
+    });
 
-  // Persist conversation turn
-  await supabase.from("wa_messages").insert({
-    wa_id: waId,
-    from_number: fromNumber,
-    name,
-    text_in: textBody,
-    text_out: reply,
+  // Parallel: generate Priya's rich reply AND extract structured lead data
+  const [rich, extracted] = await Promise.all([
+    callPriyaRich(systemPrompt, textBody, history),
+    extractLeadData(systemPrompt, textBody, history),
+  ]);
+
+  // Send: interactive (buttons) or plain text
+  const sendPromise = rich.buttons?.length
+    ? sendWhatsAppButtons(fromNumber, rich.text, rich.buttons)
+    : sendWhatsAppMessage(fromNumber, rich.text);
+
+  await Promise.all([
+    sendPromise,
+    supabase.from("wa_messages").insert({
+      from_number: fromNumber,
+      name,
+      text_in: textBody,
+      text_out: rich.text,
+    }),
+    handleCrmSideEffects(fromNumber, name, extracted),
+  ]);
+}
+
+async function handleCrmSideEffects(
+  phone: string,
+  name: string,
+  extracted: ExtractedLead | null
+) {
+  // Always upsert lead row — even if extractor returned nothing, we still log the contact.
+  const e = extracted ?? ({} as Partial<ExtractedLead>);
+  const { data: existing } = await supabase
+    .from("leads")
+    .select("*")
+    .eq("phone", phone)
+    .maybeSingle();
+
+  const mergedName = e.name ?? existing?.name ?? (name && name !== phone ? name : null);
+  const mergedProject = e.project ?? existing?.project ?? null;
+  const mergedBuyerType = e.buyer_type ?? existing?.buyer_type ?? null;
+  const mergedResidency = e.residency ?? existing?.residency ?? null;
+  const mergedTimeline = e.timeline ?? existing?.timeline ?? null;
+  const mergedBudget = e.budget ?? existing?.budget ?? null;
+
+  // Auto-compute status progression
+  let status = existing?.status ?? "new";
+  const hasQualifyingData = mergedBuyerType || mergedResidency || mergedTimeline || mergedBudget || mergedProject;
+  if (status === "new" && hasQualifyingData) status = "qualified";
+  if (e.site_visit_request) status = "booked";
+  // 'converted' and 'lost' remain manual via dashboard
+
+  const merged = {
+    phone,
+    name: mergedName,
+    project: mergedProject,
+    buyer_type: mergedBuyerType,
+    residency: mergedResidency,
+    timeline: mergedTimeline,
+    budget: mergedBudget,
+    lead_score: Math.max(e.lead_score ?? 50, existing?.lead_score ?? 0),
+    score_label: e.score_label ?? existing?.score_label ?? "WARM",
+    source: existing?.source ?? "whatsapp",
+    status,
+  };
+  await supabase.from("leads").upsert(merged, { onConflict: "phone" });
+
+  // Book site visit if requested
+  if (e.site_visit_request) {
+    await supabase.from("site_visits").insert({
+      lead_phone: phone,
+      lead_name: mergedName,
+      project: e.site_visit_request.project ?? mergedProject,
+      scheduled_for_text: e.site_visit_request.when_text,
+      status: "pending",
+    });
+  }
+
+  // 3) Auto-send brochure if requested AND a matching project has brochure_url
+  if (extracted?.brochure_request?.project) {
+    const wanted = extracted.brochure_request.project.toLowerCase();
+    const { data: kb } = await supabase
+      .from("kb_projects")
+      .select("name,brochure_url")
+      .eq("is_active", true);
+    const match = (kb ?? []).find(
+      (p) => p.brochure_url && (p.name.toLowerCase().includes(wanted) || wanted.includes(p.name.toLowerCase()))
+    );
+    if (match?.brochure_url) {
+      await fetch(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+        method: "POST",
+        headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, "Content-Type": "application/json" },
+        body: JSON.stringify({
+          messaging_product: "whatsapp",
+          to: phone,
+          type: "document",
+          document: {
+            link: match.brochure_url,
+            filename: `${match.name.replace(/\s+/g, "_")}.pdf`,
+            caption: `${match.name} — brochure`,
+          },
+        }),
+      }).catch((e) => console.error("brochure send failed:", e));
+
+      await supabase.from("wa_messages").insert({
+        from_number: phone,
+        name: "Priya (auto)",
+        text_in: null,
+        text_out: `[brochure] ${match.name}`,
+      });
+    }
+  }
+}
+
+async function transcribeWhatsAppAudio(mediaId: string): Promise<string> {
+  // 1) Resolve media URL from Meta
+  const metaRes = await fetch(`https://graph.facebook.com/v25.0/${mediaId}`, {
+    headers: { Authorization: `Bearer ${ACCESS_TOKEN}` },
+  });
+  if (!metaRes.ok) throw new Error(`meta media lookup failed: ${metaRes.status}`);
+  const { url, mime_type } = (await metaRes.json()) as { url: string; mime_type?: string };
+
+  // 2) Download audio (URL is short-lived, requires auth header)
+  const audioRes = await fetch(url, { headers: { Authorization: `Bearer ${ACCESS_TOKEN}` } });
+  if (!audioRes.ok) throw new Error(`media download failed: ${audioRes.status}`);
+  const buf = Buffer.from(await audioRes.arrayBuffer());
+
+  // 3) Whisper transcription
+  const ext = (mime_type ?? "audio/ogg").includes("mp4") ? "m4a" : "ogg";
+  const file = new File([buf], `voice.${ext}`, { type: mime_type ?? "audio/ogg" });
+  const result = await openai.audio.transcriptions.create({
+    file,
+    model: "whisper-1",
+  });
+  return (result.text ?? "").trim();
+}
+
+async function sendWhatsAppButtons(to: string, body: string, buttons: { id: string; title: string }[]) {
+  await fetch(`https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`, {
+    method: "POST",
+    headers: { Authorization: `Bearer ${ACCESS_TOKEN}`, "Content-Type": "application/json" },
+    body: JSON.stringify({
+      messaging_product: "whatsapp",
+      to,
+      type: "interactive",
+      interactive: {
+        type: "button",
+        body: { text: body.slice(0, 1024) },
+        action: {
+          buttons: buttons.slice(0, 3).map((b) => ({
+            type: "reply",
+            reply: { id: b.id.slice(0, 256), title: b.title.slice(0, 20) },
+          })),
+        },
+      },
+    }),
   });
 }
 
 async function sendWhatsAppMessage(to: string, text: string) {
   await fetch(
-    `https://graph.facebook.com/v21.0/${PHONE_NUMBER_ID}/messages`,
+    `https://graph.facebook.com/v25.0/${PHONE_NUMBER_ID}/messages`,
     {
       method: "POST",
       headers: {

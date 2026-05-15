@@ -1,6 +1,6 @@
 "use client";
 
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { useLiveData } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { CallCard } from "@/components/CallCard";
@@ -13,6 +13,36 @@ export default function CallsPage() {
   const { calls, loading } = useLiveData();
   const [filter, setFilter] = useState<Filter>("All");
   const [search, setSearch] = useState("");
+  const [enriching, setEnriching] = useState<Set<string>>(new Set());
+  const enrichedRef = useRef<Set<string>>(new Set());
+
+  // Auto-enrich any call with missing AI analysis (lead_score == null && transcript present)
+  useEffect(() => {
+    for (const c of calls) {
+      if (
+        c.lead_score == null &&
+        Array.isArray(c.transcript) &&
+        c.transcript.length > 0 &&
+        !enrichedRef.current.has(c.id)
+      ) {
+        enrichedRef.current.add(c.id);
+        setEnriching((s) => new Set(s).add(c.id));
+        fetch("/api/calls/enrich", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ id: c.id }),
+        })
+          .catch(() => {})
+          .finally(() => {
+            setEnriching((s) => {
+              const next = new Set(s);
+              next.delete(c.id);
+              return next;
+            });
+          });
+      }
+    }
+  }, [calls]);
 
   const filtered = useMemo(() => {
     return calls.filter((c) => {
@@ -39,6 +69,13 @@ export default function CallsPage() {
         title="Voice Calls"
         subtitle={`${calls.length} ${calls.length === 1 ? "call" : "calls"} total · click any card to expand the transcript`}
       />
+
+      {enriching.size > 0 && (
+        <div style={{ marginBottom: 14, padding: "10px 16px", background: "var(--gold-soft)", border: "1px solid var(--gold-dim)", borderRadius: 6, fontSize: 12, color: "var(--gold-2)", display: "flex", alignItems: "center", gap: 10 }}>
+          <span className="pulse-dot" style={{ width: 8, height: 8, borderRadius: 8, background: "var(--gold)", animation: "pulse 1s ease-in-out infinite" }} />
+          AI analysing {enriching.size} {enriching.size === 1 ? "call" : "calls"}… score, summary, project will populate within a few seconds.
+        </div>
+      )}
 
       <div className="panel">
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 20px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>

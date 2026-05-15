@@ -1,164 +1,330 @@
 "use client";
 
-import { useState, useMemo } from "react";
-import { useLiveData, bucketByScore, CallRow } from "@/lib/data";
+import { useEffect, useMemo, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ScoreBadge } from "@/components/ScoreBadge";
-import { timeAgo, fmtDuration, initials } from "@/lib/format";
+import { timeAgo, initials } from "@/lib/format";
+
+type Lead = {
+  id: string;
+  phone: string;
+  name: string | null;
+  project: string | null;
+  buyer_type: string | null;
+  residency: string | null;
+  timeline: string | null;
+  budget: string | null;
+  source: string;
+  lead_score: number;
+  score_label: string;
+  status: string;
+  notes: string | null;
+  created_at: string;
+  updated_at: string;
+};
+
+type WaMsg = {
+  id: string;
+  from_number: string;
+  name: string | null;
+  text_in: string | null;
+  text_out: string | null;
+  created_at: string;
+};
+
+const STATUS_OPTIONS = ["new", "qualified", "booked", "converted", "lost"] as const;
 
 export default function LeadsPage() {
-  const { calls, loading } = useLiveData();
-  const { hot, warm, cold } = useMemo(() => bucketByScore(calls), [calls]);
+  const [leads, setLeads] = useState<Lead[]>([]);
+  const [loading, setLoading] = useState(true);
   const [selectedId, setSelectedId] = useState<string | null>(null);
-  const selected = calls.find((c) => c.id === selectedId);
+  const [search, setSearch] = useState("");
+  const [filterStatus, setFilterStatus] = useState<string>("all");
 
-  const columns = [
-    { key: "hot", label: "Hot", hint: "Score 80+ · Ready to buy", items: hot, fg: "var(--hot)", bg: "var(--hot-soft)" },
-    { key: "warm", label: "Warm", hint: "Score 60–79 · Nurture & schedule", items: warm, fg: "var(--warm)", bg: "var(--warm-soft)" },
-    { key: "cold", label: "Cold", hint: "Score <60 · 14-day drip", items: cold, fg: "var(--cold)", bg: "var(--cold-soft)" },
-  ];
+  async function refresh() {
+    const res = await fetch("/api/leads", { cache: "no-store" });
+    const data = await res.json();
+    if (Array.isArray(data)) setLeads(data);
+    setLoading(false);
+  }
+
+  useEffect(() => {
+    refresh();
+    const id = setInterval(refresh, 8000);
+    return () => clearInterval(id);
+  }, []);
+
+  const filtered = useMemo(() => {
+    let r = leads;
+    if (filterStatus !== "all") r = r.filter((l) => l.status === filterStatus);
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      r = r.filter((l) =>
+        (l.name ?? "").toLowerCase().includes(q) ||
+        l.phone.toLowerCase().includes(q) ||
+        (l.project ?? "").toLowerCase().includes(q)
+      );
+    }
+    return r;
+  }, [leads, search, filterStatus]);
+
+  const { hot, warm, cold, booked, converted, qualified } = useMemo(() => {
+    const r = { hot: 0, warm: 0, cold: 0, booked: 0, converted: 0, qualified: 0 };
+    for (const l of leads) {
+      const s = (l.score_label ?? "WARM").toUpperCase();
+      if (s === "HOT") r.hot++;
+      else if (s === "COLD") r.cold++;
+      else r.warm++;
+      if (l.status === "booked") r.booked++;
+      if (l.status === "converted") r.converted++;
+      if (l.status === "qualified" || l.status === "booked" || l.status === "converted") r.qualified++;
+    }
+    return r;
+  }, [leads]);
+
+  const conversionRate = leads.length > 0 ? Math.round((booked + converted) / leads.length * 100) : 0;
+  const qualRate = leads.length > 0 ? Math.round(qualified / leads.length * 100) : 0;
+
+  const selected = leads.find((l) => l.id === selectedId);
 
   return (
     <>
       <PageHeader
-        title="Leads"
-        subtitle={`${calls.length} qualified by the AI · drag your eye across the funnel`}
+        title="Leads · CRM"
+        subtitle="Every contact across WhatsApp, Voice, and Web — live, scored, and routed."
       />
 
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14 }}>
-        {columns.map((col) => (
-          <div key={col.key} className="panel" style={{ display: "flex", flexDirection: "column", minHeight: 400 }}>
-            <div style={{ padding: "14px 18px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "center" }}>
-              <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
-                <span className={`score ${col.key}`}>{col.label.toUpperCase()}</span>
-                <span style={{ fontSize: 20, fontWeight: 600, color: col.fg }} className="num">{col.items.length}</span>
-              </div>
-              <span style={{ fontSize: 10.5, color: "var(--muted)" }}>{col.hint}</span>
-            </div>
-
-            <div style={{ flex: 1, padding: 12, display: "flex", flexDirection: "column", gap: 8, overflowY: "auto" }}>
-              {loading ? (
-                [0,1,2].map((i) => <div key={i} className="skeleton" style={{ height: 96 }} />)
-              ) : col.items.length === 0 ? (
-                <div style={{ padding: "32px 16px", textAlign: "center", color: "var(--muted)", fontSize: 12 }}>
-                  No {col.label.toLowerCase()} leads yet
-                </div>
-              ) : (
-                col.items.map((c) => <LeadCard key={c.id} call={c} onClick={() => setSelectedId(c.id)} />)
-              )}
-            </div>
-          </div>
-        ))}
+      {/* KPI strip */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(6, 1fr)", gap: 12, marginBottom: 18 }}>
+        <Kpi label="Total Leads" value={leads.length} accent="var(--text)" />
+        <Kpi label="Hot" value={hot} accent="var(--hot)" sub={`${leads.length ? Math.round(hot/leads.length*100) : 0}%`} />
+        <Kpi label="Qualified" value={qualified} accent="var(--warm)" sub={`${qualRate}% qual rate`} />
+        <Kpi label="Site Visits" value={booked} accent="var(--gold)" />
+        <Kpi label="Converted" value={converted} accent="var(--cold)" />
+        <Kpi label="Conv. Rate" value={`${conversionRate}%`} accent="var(--gold-2)" />
       </div>
 
-      {/* Detail drawer */}
-      {selected && <LeadDrawer call={selected} onClose={() => setSelectedId(null)} />}
+      {/* Controls */}
+      <div style={{ display: "flex", gap: 10, marginBottom: 14, alignItems: "center" }}>
+        <input
+          aria-label="Search leads"
+          placeholder="Search by name, phone, or project…"
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          style={{ flex: 1, padding: "8px 12px", background: "var(--bg-2)", border: "1px solid var(--line)", borderRadius: 4, color: "var(--text)", fontSize: 13 }}
+        />
+        <select
+          aria-label="Filter by status"
+          value={filterStatus}
+          onChange={(e) => setFilterStatus(e.target.value)}
+          style={{ padding: "8px 12px", background: "var(--bg-2)", border: "1px solid var(--line)", borderRadius: 4, color: "var(--text)", fontSize: 12 }}
+        >
+          <option value="all">All statuses</option>
+          {STATUS_OPTIONS.map((s) => <option key={s} value={s}>{s}</option>)}
+        </select>
+      </div>
+
+      {/* Lead grid */}
+      <div className="panel" style={{ overflow: "hidden" }}>
+        {loading && leads.length === 0 ? (
+          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>Loading leads…</div>
+        ) : filtered.length === 0 ? (
+          <EmptyState title="No leads match" hint={search ? "Try a different search" : "Leads will appear here as conversations come in"} />
+        ) : (
+          <table style={{ width: "100%", borderCollapse: "collapse" }}>
+            <thead>
+              <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--bg-2)" }}>
+                <Th>Lead</Th>
+                <Th>Project</Th>
+                <Th>Buyer</Th>
+                <Th>Timeline</Th>
+                <Th>Budget</Th>
+                <Th>Score</Th>
+                <Th>Status</Th>
+                <Th>Updated</Th>
+              </tr>
+            </thead>
+            <tbody>
+              {filtered.map((l) => (
+                <tr
+                  key={l.id}
+                  onClick={() => setSelectedId(l.id)}
+                  style={{ borderBottom: "1px solid var(--line)", cursor: "pointer", transition: "background 0.1s" }}
+                  onMouseEnter={(e) => { e.currentTarget.style.background = "var(--bg-2)"; }}
+                  onMouseLeave={(e) => { e.currentTarget.style.background = "transparent"; }}
+                >
+                  <Td>
+                    <div style={{ display: "flex", gap: 10, alignItems: "center" }}>
+                      <div className="avatar">{initials(l.name ?? l.phone)}</div>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{l.name ?? "Unnamed"}</div>
+                        <div className="num" style={{ fontSize: 11, color: "var(--muted)" }}>{l.phone}</div>
+                      </div>
+                    </div>
+                  </Td>
+                  <Td><span style={{ fontSize: 12 }}>{l.project ?? "—"}</span></Td>
+                  <Td>{l.buyer_type ? <Chip text={l.buyer_type} /> : "—"}</Td>
+                  <Td>{l.timeline ?? "—"}</Td>
+                  <Td>{l.budget ?? "—"}</Td>
+                  <Td><ScoreBadge score={l.lead_score} /></Td>
+                  <Td><StatusPill status={l.status} /></Td>
+                  <Td><span style={{ fontSize: 11, color: "var(--muted)" }}>{timeAgo(l.updated_at)}</span></Td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        )}
+      </div>
+
+      {selected && <LeadDetail lead={selected} onClose={() => { setSelectedId(null); refresh(); }} />}
     </>
   );
 }
 
-function LeadCard({ call, onClick }: { call: CallRow; onClick: () => void }) {
+function Kpi({ label, value, accent, sub }: { label: string; value: number | string; accent: string; sub?: string }) {
   return (
-    <button
-      onClick={onClick}
-      style={{
-        textAlign: "left",
-        background: "var(--panel-2)",
-        border: "1px solid var(--line)",
-        borderRadius: 8,
-        padding: "12px 14px",
-        cursor: "pointer",
-        transition: "border-color 0.15s, transform 0.15s",
-        color: "var(--text)",
-      }}
-      onMouseEnter={(e) => { e.currentTarget.style.borderColor = "var(--line-strong)"; }}
-      onMouseLeave={(e) => { e.currentTarget.style.borderColor = "var(--line)"; }}
-    >
-      <div style={{ display: "flex", alignItems: "center", gap: 10, marginBottom: 8 }}>
-        <div className="avatar sm">{initials(call.lead_name)}</div>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{call.lead_name ?? "Unknown"}</div>
-          <div style={{ fontSize: 10.5, color: "var(--muted)" }} className="num">{call.lead_phone ?? "—"}</div>
-        </div>
-        <ScoreBadge score={call.lead_score} showScore={false} />
-      </div>
-      {call.project && <div style={{ fontSize: 11, color: "var(--text-2)", marginBottom: 4 }}>{call.project}</div>}
-      {call.outcome && <div style={{ fontSize: 11, color: "var(--muted)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>→ {call.outcome}</div>}
-      <div style={{ display: "flex", justifyContent: "space-between", marginTop: 8, fontSize: 10, color: "var(--muted)" }}>
-        {call.source && <span>{call.source}</span>}
-        <span className="num">{timeAgo(call.created_at)}</span>
-      </div>
-    </button>
+    <div className="panel" style={{ padding: "14px 16px" }}>
+      <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6, marginBottom: 6 }}>{label}</div>
+      <div className="num" style={{ fontSize: 22, fontWeight: 600, color: accent, letterSpacing: -0.4 }}>{value}</div>
+      {sub && <div style={{ fontSize: 10.5, color: "var(--muted)", marginTop: 2 }}>{sub}</div>}
+    </div>
   );
 }
 
-function LeadDrawer({ call, onClose }: { call: CallRow; onClose: () => void }) {
+function Th({ children }: { children: React.ReactNode }) {
+  return <th style={{ padding: "12px 14px", textAlign: "left", fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>{children}</th>;
+}
+function Td({ children }: { children: React.ReactNode }) {
+  return <td style={{ padding: "11px 14px", fontSize: 12.5 }}>{children}</td>;
+}
+
+function Chip({ text }: { text: string }) {
+  return <span style={{ display: "inline-block", padding: "2px 8px", fontSize: 10.5, background: "var(--bg-2)", border: "1px solid var(--line)", borderRadius: 10, textTransform: "capitalize" }}>{text.replace(/_/g, " ")}</span>;
+}
+
+function StatusPill({ status }: { status: string }) {
+  const color =
+    status === "converted" ? "var(--gold-2)" :
+    status === "booked" ? "var(--gold)" :
+    status === "qualified" ? "var(--warm)" :
+    status === "lost" ? "var(--hot)" :
+    "var(--muted)";
   return (
-    <>
-      <div
-        onClick={onClose}
-        style={{
-          position: "fixed", inset: 0, background: "rgba(0,0,0,0.55)", zIndex: 90, backdropFilter: "blur(2px)",
-          animation: "fade-in 0.18s ease-out",
-        }}
-      />
-      <div
-        className="fade-in"
-        style={{
-          position: "fixed", top: 0, right: 0, bottom: 0, width: 480, maxWidth: "92vw", zIndex: 100,
-          background: "var(--panel)", borderLeft: "1px solid var(--line)",
-          display: "flex", flexDirection: "column",
-          boxShadow: "-12px 0 32px rgba(0,0,0,0.4)",
-        }}
-      >
-        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--line)", display: "flex", alignItems: "flex-start", justifyContent: "space-between", gap: 16 }}>
-          <div>
-            <div style={{ fontSize: 18, fontWeight: 600, marginBottom: 4 }}>{call.lead_name ?? "Unknown"}</div>
-            <div style={{ fontSize: 12, color: "var(--muted)" }} className="num">{call.lead_phone ?? "—"}</div>
+    <span style={{ display: "inline-block", padding: "3px 9px", fontSize: 10.5, fontWeight: 600, color, border: `1px solid ${color}`, borderRadius: 12, textTransform: "uppercase", letterSpacing: 0.4 }}>
+      {status}
+    </span>
+  );
+}
+
+function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
+  const [messages, setMessages] = useState<WaMsg[]>([]);
+  const [updating, setUpdating] = useState(false);
+  const [localStatus, setLocalStatus] = useState(lead.status);
+
+  useEffect(() => {
+    fetch(`/api/wa-messages?phone=${encodeURIComponent(lead.phone)}`)
+      .then((r) => r.json())
+      .then((d) => Array.isArray(d) && setMessages(d.slice(0, 20)))
+      .catch(() => {});
+  }, [lead.phone]);
+
+  async function changeStatus(newStatus: string) {
+    setUpdating(true);
+    await fetch("/api/leads", {
+      method: "PATCH",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ id: lead.id, status: newStatus }),
+    });
+    setLocalStatus(newStatus);
+    setUpdating(false);
+  }
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.75)", zIndex: 100, display: "flex", alignItems: "center", justifyContent: "center", padding: 20 }} onClick={onClose}>
+      <div className="panel" style={{ background: "var(--panel)", maxWidth: 760, width: "100%", maxHeight: "90vh", overflowY: "auto", padding: 0 }} onClick={(e) => e.stopPropagation()}>
+        {/* Header */}
+        <div style={{ padding: "20px 24px", borderBottom: "1px solid var(--line)", display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 16 }}>
+          <div style={{ display: "flex", gap: 14, alignItems: "center" }}>
+            <div className="avatar" style={{ width: 44, height: 44, fontSize: 16 }}>{initials(lead.name ?? lead.phone)}</div>
+            <div>
+              <div style={{ fontSize: 18, fontWeight: 600 }}>{lead.name ?? "Unnamed"}</div>
+              <div className="num" style={{ fontSize: 12, color: "var(--muted)", marginTop: 3 }}>{lead.phone}</div>
+              <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 3 }}>via {lead.source} · {timeAgo(lead.created_at)}</div>
+            </div>
           </div>
-          <button onClick={onClose} aria-label="Close" style={{ background: "transparent", border: "none", color: "var(--muted)", cursor: "pointer", padding: 4 }}>
-            <svg width="20" height="20" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round"><path d="M5 5l10 10M15 5L5 15" /></svg>
-          </button>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <ScoreBadge score={lead.lead_score} />
+            <StatusPill status={localStatus} />
+          </div>
         </div>
 
-        <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--line)", display: "flex", flexWrap: "wrap", gap: 8 }}>
-          <ScoreBadge score={call.lead_score} />
-          {call.source && <span className="badge">{call.source}</span>}
-          {call.project && <span className="badge subtle">{call.project}</span>}
+        {/* Quick facts grid */}
+        <div style={{ padding: "18px 24px", display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 16, borderBottom: "1px solid var(--line)" }}>
+          <Field label="Project" value={lead.project} />
+          <Field label="Buyer Type" value={lead.buyer_type?.replace(/_/g, " ") ?? null} />
+          <Field label="Residency" value={lead.residency?.toUpperCase() ?? null} />
+          <Field label="Timeline" value={lead.timeline} />
+          <Field label="Budget" value={lead.budget} />
+          <Field label="Last Update" value={timeAgo(lead.updated_at)} />
+          <Field label="Score" value={`${lead.lead_score} / 100`} />
+          <Field label="Status" value={localStatus} />
         </div>
 
-        <div style={{ padding: "16px 24px", borderBottom: "1px solid var(--line)" }}>
-          <Row label="Call duration" value={fmtDuration(call.duration_seconds ?? 0)} />
-          <Row label="When" value={`${timeAgo(call.created_at)} · ${new Date(call.created_at).toLocaleString()}`} />
-          <Row label="Outcome" value={call.outcome ?? "—"} />
-        </div>
-
-        <div style={{ flex: 1, overflowY: "auto", padding: "16px 24px" }}>
-          <div style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 12, fontWeight: 600 }}>Transcript</div>
-          {call.transcript && call.transcript.length > 0 ? (
-            <div style={{ display: "flex", flexDirection: "column", gap: 14 }}>
-              {call.transcript.map((t, i) => (
-                <div key={i}>
-                  <div style={{ fontWeight: 600, color: t.side === "ai" ? "var(--gold)" : "var(--text)", fontSize: 10.5, letterSpacing: 0.5, textTransform: "uppercase", marginBottom: 4 }}>
-                    {t.speaker} <span style={{ color: "var(--muted)", marginLeft: 6 }}>{t.time}</span>
-                  </div>
-                  <div style={{ fontSize: 13, lineHeight: 1.55, color: "var(--text-2)" }}>{t.text}</div>
+        {/* WhatsApp preview */}
+        <div style={{ padding: "18px 24px", borderBottom: "1px solid var(--line)" }}>
+          <div style={{ fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 10 }}>Recent WhatsApp ({messages.length})</div>
+          {messages.length === 0 ? (
+            <div style={{ fontSize: 12, color: "var(--muted)" }}>No messages found.</div>
+          ) : (
+            <div style={{ display: "flex", flexDirection: "column", gap: 8, maxHeight: 240, overflowY: "auto", paddingRight: 4 }}>
+              {messages.slice().reverse().map((m) => (
+                <div key={m.id}>
+                  {m.text_in && (
+                    <div style={{ background: "var(--panel)", border: "1px solid var(--line)", padding: "6px 10px", borderRadius: 6, fontSize: 12, marginBottom: 4 }}>
+                      <div style={{ fontSize: 9.5, color: "var(--muted)", marginBottom: 2 }}>{lead.name ?? "Lead"} · {timeAgo(m.created_at)}</div>
+                      {m.text_in}
+                    </div>
+                  )}
+                  {m.text_out && (
+                    <div style={{ background: "var(--gold-soft-2)", border: "1px solid var(--gold-dim)", padding: "6px 10px", borderRadius: 6, fontSize: 12 }}>
+                      <div style={{ fontSize: 9.5, color: "var(--gold-dim)", marginBottom: 2 }}>Priya · {timeAgo(m.created_at)}</div>
+                      {m.text_out}
+                    </div>
+                  )}
                 </div>
               ))}
             </div>
-          ) : <div style={{ fontSize: 12, color: "var(--muted)" }}>No transcript available.</div>}
+          )}
+        </div>
+
+        {/* Action footer */}
+        <div style={{ padding: "16px 24px", display: "flex", justifyContent: "space-between", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "flex", gap: 8 }}>
+            {STATUS_OPTIONS.filter((s) => s !== localStatus).map((s) => (
+              <button
+                key={s}
+                type="button"
+                onClick={() => changeStatus(s)}
+                disabled={updating}
+                style={{ padding: "6px 12px", background: "transparent", color: "var(--text)", border: "1px solid var(--line-strong)", borderRadius: 4, cursor: "pointer", fontSize: 11, textTransform: "capitalize" }}
+              >
+                Mark {s}
+              </button>
+            ))}
+          </div>
+          <button type="button" onClick={onClose} style={{ padding: "8px 14px", background: "var(--gold)", color: "#000", border: "none", borderRadius: 4, cursor: "pointer", fontSize: 12, fontWeight: 600 }}>Close</button>
         </div>
       </div>
-    </>
+    </div>
   );
 }
 
-function Row({ label, value }: { label: string; value: string }) {
+function Field({ label, value }: { label: string; value: string | null }) {
   return (
-    <div style={{ display: "flex", justifyContent: "space-between", padding: "8px 0", fontSize: 12.5 }}>
-      <span style={{ color: "var(--muted)" }}>{label}</span>
-      <span style={{ color: "var(--text-2)", textAlign: "right", maxWidth: "60%" }}>{value}</span>
+    <div>
+      <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, marginBottom: 4 }}>{label}</div>
+      <div style={{ fontSize: 13 }}>{value ?? "—"}</div>
     </div>
   );
 }
