@@ -136,6 +136,7 @@ export default function LeadsPage() {
             <thead>
               <tr style={{ borderBottom: "1px solid var(--line)", background: "var(--bg-2)" }}>
                 <Th>Lead</Th>
+                <Th>Source</Th>
                 <Th>Project</Th>
                 <Th>Buyer</Th>
                 <Th>Timeline</Th>
@@ -163,6 +164,7 @@ export default function LeadsPage() {
                       </div>
                     </div>
                   </Td>
+                  <Td><SourceBadge source={l.source} /></Td>
                   <Td><span style={{ fontSize: 12 }}>{l.project ?? "—"}</span></Td>
                   <Td>{l.buyer_type ? <Chip text={l.buyer_type} /> : "—"}</Td>
                   <Td>{l.timeline ?? "—"}</Td>
@@ -197,6 +199,35 @@ function Th({ children }: { children: React.ReactNode }) {
 }
 function Td({ children }: { children: React.ReactNode }) {
   return <td style={{ padding: "11px 14px", fontSize: 12.5 }}>{children}</td>;
+}
+
+function SourceBadge({ source }: { source: string | null | undefined }) {
+  const s = (source ?? "").toLowerCase();
+  let label = "Direct";
+  let color = "var(--muted)";
+  let bg = "var(--bg-2)";
+  if (s === "whatsapp" || s === "wa") {
+    label = "WhatsApp"; color = "#25d366"; bg = "rgba(37, 211, 102, 0.08)";
+  } else if (s === "ringg" || s === "voice" || s === "voice_agent") {
+    label = "Voice Agent"; color = "var(--gold-2)"; bg = "rgba(201,168,90,0.08)";
+  } else if (s === "meta" || s === "facebook" || s === "instagram") {
+    label = "Meta Ad"; color = "#4f8cff"; bg = "rgba(79, 140, 255, 0.08)";
+  } else if (s === "google") {
+    label = "Google Ad"; color = "#ea4335"; bg = "rgba(234, 67, 53, 0.08)";
+  } else if (s === "web" || s === "website") {
+    label = "Website"; color = "var(--text-2)";
+  } else if (s) {
+    label = s.charAt(0).toUpperCase() + s.slice(1);
+  }
+  return (
+    <span style={{
+      display: "inline-block", padding: "3px 9px", fontSize: 10.5, fontWeight: 500,
+      color, background: bg, border: `1px solid ${color}33`, borderRadius: 4,
+      letterSpacing: 0.2,
+    }}>
+      {label}
+    </span>
+  );
 }
 
 function Chip({ text }: { text: string }) {
