@@ -59,7 +59,7 @@ async function processMessage(body: Record<string, unknown> | null) {
       textBody = await transcribeWhatsAppAudio(mediaId).catch(() => "");
     }
     if (!textBody) {
-      await sendWhatsAppMessage(fromNumber, "Voice note samajh nahi aaya. Thoda text mein bhejo please?");
+      await sendWhatsAppMessage(fromNumber, "Sorry, I couldn't understand that voice note. Could you send it as text?");
       return;
     }
   } else {
