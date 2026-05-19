@@ -243,17 +243,10 @@ Deno.serve(async (req) => {
     return new Response("method not allowed", { status: 405, headers: corsHeaders });
   }
 
-  const expectedSecret = Deno.env.get("RINGG_WEBHOOK_SECRET");
-  if (expectedSecret) {
-    const got = req.headers.get("x-webhook-secret");
-    if (got !== expectedSecret) {
-      console.warn("[ringg-webhook] unauthorized — bad/missing X-Webhook-Secret");
-      return new Response(
-        JSON.stringify({ ok: false, error: "unauthorized" }),
-        { status: 401, headers: { ...corsHeaders, "Content-Type": "application/json" } },
-      );
-    }
-  }
+  // NOTE: No webhook secret check. Ringg.ai does NOT support custom webhook
+  // headers and does not sign payloads (see CLAUDE.md), so an X-Webhook-Secret
+  // gate rejects every real call with 401 and silently drops all call data.
+  // Do NOT re-add a RINGG_WEBHOOK_SECRET header check here.
 
   let body: Record<string, unknown>;
   try {
