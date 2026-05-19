@@ -1,0 +1,10 @@
+# Supabase project config.
+# project_ref: yhwoqmhnvzpfgacfaidg
+
+project_id = "sarthak-singapore"
+
+# Ringg.ai posts raw webhooks with no Supabase JWT. JWT verification MUST stay
+# off for this function or the gateway returns 401 (UNAUTHORIZED_NO_AUTH_HEADER)
+# before the handler runs and no call rows are written.
+[functions.ringg-webhook]
+verify_jwt = false
