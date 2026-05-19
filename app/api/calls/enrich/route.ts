@@ -111,19 +111,26 @@ export async function POST(req: NextRequest) {
     if (parsed.outcome) update.outcome = parsed.outcome;
     if (parsed.language) update.language = parsed.language;
 
-    // Build a rich analysis blob (CallCard + detail page render from it)
+    // Merge onto the existing Ringg analysis so recording_url, platform_summary,
+    // classification etc. survive re-enrichment.
+    const prevAnalysis = (call.analysis ?? {}) as Record<string, unknown>;
     update.analysis = {
-      intent: parsed.buyer_type ?? null,
-      budget_range: parsed.budget ?? null,
-      timeline: parsed.timeline ?? null,
-      nri_status: parsed.residency ?? null,
-      site_visit_booked: parsed.site_visit_booked ?? false,
-      next_action: parsed.next_action ?? null,
-      sentiment: parsed.sentiment ?? null,
-      motivation: parsed.motivation ?? null,
-      coaching: parsed.coaching ?? null,
-      key_points: Array.isArray(parsed.key_points) ? parsed.key_points : [],
-      action_items: Array.isArray(parsed.action_items) ? parsed.action_items : [],
+      ...prevAnalysis,
+      intent: parsed.buyer_type ?? prevAnalysis.intent ?? null,
+      budget_range: parsed.budget ?? prevAnalysis.budget_range ?? null,
+      timeline: parsed.timeline ?? prevAnalysis.timeline ?? null,
+      nri_status: parsed.residency ?? prevAnalysis.nri_status ?? null,
+      site_visit_booked: parsed.site_visit_booked ?? prevAnalysis.site_visit_booked ?? false,
+      next_action: parsed.next_action ?? prevAnalysis.next_action ?? null,
+      sentiment: parsed.sentiment ?? prevAnalysis.sentiment ?? null,
+      motivation: parsed.motivation ?? prevAnalysis.motivation ?? null,
+      coaching: parsed.coaching ?? prevAnalysis.coaching ?? null,
+      key_points: Array.isArray(parsed.key_points) && parsed.key_points.length
+        ? parsed.key_points
+        : (prevAnalysis.key_points ?? []),
+      action_items: Array.isArray(parsed.action_items) && parsed.action_items.length
+        ? parsed.action_items
+        : (prevAnalysis.action_items ?? []),
     };
 
     const { data: updated, error: upErr } = await supabase

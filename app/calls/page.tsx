@@ -16,11 +16,15 @@ export default function CallsPage() {
   const [enriching, setEnriching] = useState<Set<string>>(new Set());
   const enrichedRef = useRef<Set<string>>(new Set());
 
-  // Auto-enrich any call with missing AI analysis (lead_score == null && transcript present)
+  // Auto-enrich when a call lacks a score OR lacks the deep sentiment/motivation
+  // blob. Ringg sets a heuristic lead_score, so the score-null check alone never
+  // fires for real calls — gate on missing analysis.sentiment too.
   useEffect(() => {
     for (const c of calls) {
+      const an = (c.analysis ?? {}) as Record<string, unknown>;
+      const needsDeep = !an.sentiment || !an.motivation;
       if (
-        c.lead_score == null &&
+        (c.lead_score == null || needsDeep) &&
         Array.isArray(c.transcript) &&
         c.transcript.length > 0 &&
         !enrichedRef.current.has(c.id)
