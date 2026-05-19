@@ -2,7 +2,9 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { openai } from "@/lib/openai";
 
-const ENRICH_PROMPT = `Read this Sarthak Singapore voice-call transcript between an AI sales agent and a prospective buyer. Return JSON with:
+const ENRICH_PROMPT = `You are a senior real-estate sales analyst. Read this Sarthak Singapore voice-call transcript between an AI sales agent and a prospective buyer and produce a DEEP, evidence-based analysis. Quote or paraphrase actual transcript moments as evidence — never invent.
+
+Return ONLY this JSON object:
 
 {
   "lead_name": string | null,
@@ -11,21 +13,55 @@ const ENRICH_PROMPT = `Read this Sarthak Singapore voice-call transcript between
   "residency": "local" | "nri" | null,
   "timeline": string | null,
   "budget": string | null,
-  "lead_score": number,        // 0-100
+  "lead_score": number,        // 0-100 overall lead quality
   "score_label": "HOT" | "WARM" | "COLD",
-  "summary": string,           // 1-2 sentence English summary
+  "summary": string,           // 2-3 sentence English summary of the whole call
   "outcome": string,           // e.g., "Site visit booked · Saturday 11am", "Qualified · awaiting brochure", "Not interested"
   "language": string | null,   // "hi", "en", "hi-en", etc.
   "site_visit_booked": boolean,
-  "next_action": string | null
+  "next_action": string | null,
+
+  "sentiment": {
+    "overall": "positive" | "neutral" | "negative" | "mixed",
+    "score": number,                 // 0-100, 100 = extremely positive/enthusiastic, 50 = neutral, 0 = hostile
+    "trajectory": "improving" | "declining" | "steady" | "volatile",  // how mood moved across the call
+    "emotions": string[],            // 2-5 specific emotions observed, e.g. ["curious","price-anxious","reassured"]
+    "rationale": string,             // 2-3 sentences explaining the read, citing what the buyer said
+    "moments": [                     // 2-4 pivotal emotional moments
+      { "quote": string, "read": string }   // quote = paraphrased buyer line, read = what it signals
+    ]
+  },
+
+  "motivation": {
+    "score": number,                 // 0-100 — how strongly motivated to actually buy soon
+    "level": "very_high" | "high" | "moderate" | "low" | "unclear",
+    "urgency": "immediate" | "weeks" | "months" | "exploratory" | "unclear",
+    "buying_stage": "unaware" | "researching" | "comparing" | "ready_to_visit" | "ready_to_buy",
+    "signals": [                     // 3-6 concrete motivation signals, each with evidence + weight
+      { "signal": string, "evidence": string, "weight": "strong" | "medium" | "weak" }
+    ],
+    "objections": [                  // buyer concerns/blockers; [] if none
+      { "objection": string, "severity": "high" | "medium" | "low", "handled": boolean }
+    ],
+    "drivers": string[]              // 2-4 core reasons this person would buy (e.g. "school proximity for kids")
+  },
+
+  "coaching": {
+    "what_went_well": string[],      // 1-3 things the agent did well
+    "what_to_improve": string[],     // 1-3 misses or follow-up gaps
+    "recommended_next_step": string  // single sharpest next action for the human sales team
+  },
+
+  "key_points": string[],            // 3-6 factual bullets a salesperson must know before follow-up
+  "action_items": string[]           // 2-5 concrete to-dos
 }
 
 Rules:
-- Use null for genuinely unknown fields. Do NOT invent.
-- score 80+ = HOT (clear intent, budget, timeline)
-- score 60-79 = WARM (engaged but vague on at least one dimension)
-- score <60 = COLD
-- Reply ONLY with the JSON object.`;
+- Use null / [] for genuinely unknown fields. Do NOT invent facts.
+- lead_score 80+ = HOT (clear intent + budget + timeline), 60-79 = WARM (engaged, vague on one dimension), <60 = COLD.
+- sentiment.score and motivation.score are independent of lead_score — a buyer can be warm but anxious, or cold but polite.
+- Be specific and quote real moments in evidence/rationale/moments.
+- Reply ONLY with the JSON object, no prose around it.`;
 
 type Turn = { speaker?: string; text?: string };
 
@@ -61,8 +97,8 @@ export async function POST(req: NextRequest) {
         { role: "system", content: ENRICH_PROMPT },
         { role: "user", content: transcriptText },
       ],
-      max_tokens: 500,
-      temperature: 0.1,
+      max_tokens: 1600,
+      temperature: 0.2,
     });
     const parsed = JSON.parse(response.choices[0].message.content ?? "{}");
 
@@ -75,7 +111,7 @@ export async function POST(req: NextRequest) {
     if (parsed.outcome) update.outcome = parsed.outcome;
     if (parsed.language) update.language = parsed.language;
 
-    // Build a rich analysis blob (CallCard already renders chips from it)
+    // Build a rich analysis blob (CallCard + detail page render from it)
     update.analysis = {
       intent: parsed.buyer_type ?? null,
       budget_range: parsed.budget ?? null,
@@ -83,6 +119,11 @@ export async function POST(req: NextRequest) {
       nri_status: parsed.residency ?? null,
       site_visit_booked: parsed.site_visit_booked ?? false,
       next_action: parsed.next_action ?? null,
+      sentiment: parsed.sentiment ?? null,
+      motivation: parsed.motivation ?? null,
+      coaching: parsed.coaching ?? null,
+      key_points: Array.isArray(parsed.key_points) ? parsed.key_points : [],
+      action_items: Array.isArray(parsed.action_items) ? parsed.action_items : [],
     };
 
     const { data: updated, error: upErr } = await supabase

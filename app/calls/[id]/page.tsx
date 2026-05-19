@@ -22,6 +22,28 @@ type AnalysisBlob = {
   key_points?: string[];
   action_items?: string[];
   recording_url?: string;
+  sentiment?: {
+    overall?: "positive" | "neutral" | "negative" | "mixed";
+    score?: number;
+    trajectory?: "improving" | "declining" | "steady" | "volatile";
+    emotions?: string[];
+    rationale?: string;
+    moments?: { quote: string; read: string }[];
+  } | null;
+  motivation?: {
+    score?: number;
+    level?: "very_high" | "high" | "moderate" | "low" | "unclear";
+    urgency?: "immediate" | "weeks" | "months" | "exploratory" | "unclear";
+    buying_stage?: "unaware" | "researching" | "comparing" | "ready_to_visit" | "ready_to_buy";
+    signals?: { signal: string; evidence: string; weight: "strong" | "medium" | "weak" }[];
+    objections?: { objection: string; severity: "high" | "medium" | "low"; handled: boolean }[];
+    drivers?: string[];
+  } | null;
+  coaching?: {
+    what_went_well?: string[];
+    what_to_improve?: string[];
+    recommended_next_step?: string;
+  } | null;
   custom_args?: Record<string, string>;
 };
 
@@ -207,6 +229,22 @@ function StatTile({
   );
 }
 
+function MotMetric({ label, value, accent }: { label: string; value: React.ReactNode; accent: string }) {
+  return (
+    <div style={{
+      padding: "12px 14px", borderRadius: 8,
+      background: "var(--bg-2)", border: "1px solid var(--line)",
+    }}>
+      <div style={{ fontSize: 9.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.8, fontWeight: 600 }}>
+        {label}
+      </div>
+      <div style={{ fontSize: 15, fontWeight: 700, color: accent, marginTop: 4, letterSpacing: -0.2 }}>
+        {value}
+      </div>
+    </div>
+  );
+}
+
 export default function CallDetailPage() {
   const params = useParams<{ id: string }>();
   const [call, setCall] = useState<CallRow | null>(null);
@@ -226,7 +264,39 @@ export default function CallDetailPage() {
   }, [params.id]);
 
   const analysis = (call?.analysis ?? {}) as AnalysisBlob;
-  const sentiment = useMemo(() => computeSentiment(call?.transcript ?? null), [call?.transcript]);
+  const regexSentiment = useMemo(() => computeSentiment(call?.transcript ?? null), [call?.transcript]);
+
+  // Prefer the LLM sentiment from enrichment; fall back to the regex heuristic.
+  const ai = analysis.sentiment ?? null;
+  const sentiment = useMemo(() => {
+    if (ai && (ai.overall || typeof ai.score === "number")) {
+      const overall = ai.overall ?? "neutral";
+      const color =
+        overall === "positive" ? "#7dc77d" :
+        overall === "negative" ? "#c97d7d" :
+        overall === "mixed" ? "#c9a85a" : "var(--muted)";
+      const emoji =
+        overall === "positive" ? "▲" :
+        overall === "negative" ? "▼" :
+        overall === "mixed" ? "◆" : "•";
+      return {
+        source: "ai" as const,
+        label: overall.charAt(0).toUpperCase() + overall.slice(1),
+        color, emoji,
+        score: typeof ai.score === "number" ? ai.score : 50,
+        ratio: (typeof ai.score === "number" ? ai.score : 50) / 100,
+        pos: regexSentiment.pos, neg: regexSentiment.neg,
+      };
+    }
+    return {
+      source: "regex" as const,
+      ...regexSentiment,
+      score: Math.round((regexSentiment.ratio ?? 0.5) * 100),
+    };
+  }, [ai, regexSentiment]);
+
+  const motivation = analysis.motivation ?? null;
+  const coaching = analysis.coaching ?? null;
 
   if (loading) {
     return <div className="skeleton" style={{ height: 240, marginTop: 24 }} />;
@@ -320,12 +390,35 @@ export default function CallDetailPage() {
             </span>
           }
           sub={
-            sentiment.pos + sentiment.neg > 0
+            sentiment.source === "ai"
+              ? `${Math.round(sentiment.score)}/100${ai?.trajectory ? ` · ${ai.trajectory}` : ""}`
+              : sentiment.pos + sentiment.neg > 0
               ? `${sentiment.pos} positive · ${sentiment.neg} negative cues`
               : "No clear signal"
           }
           accent={sentiment.color}
           icon="❤"
+        />
+        <KpiTile
+          label="Motivation"
+          value={
+            motivation && typeof motivation.score === "number"
+              ? `${Math.round(motivation.score)}`
+              : motivation?.level
+              ? humanize(motivation.level)
+              : "—"
+          }
+          sub={
+            motivation
+              ? `${motivation.level ? humanize(motivation.level) : "—"}${motivation.urgency ? ` · ${humanize(motivation.urgency)}` : ""}`
+              : "Awaiting analysis"
+          }
+          accent={
+            motivation && typeof motivation.score === "number"
+              ? motivation.score >= 75 ? "#7dc77d" : motivation.score >= 50 ? "#c9a85a" : "#c97d7d"
+              : "#9d8a4f"
+          }
+          icon="⚡"
         />
         <KpiTile
           label="Outcome"
@@ -428,32 +521,258 @@ export default function CallDetailPage() {
         </div>
       </Section>
 
-      {/* ── Sentiment Detail ──────────────────────────────── */}
-      {(sentiment.pos > 0 || sentiment.neg > 0) && (
-        <Section title="Sentiment Breakdown">
-          <div className="panel" style={{ padding: "18px 20px" }}>
-            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 10 }}>
-              <div style={{ fontSize: 13, color: "var(--text-2)" }}>
-                <span style={{ color: sentiment.color, fontWeight: 600 }}>{sentiment.label}</span>
-                <span style={{ color: "var(--muted)", marginLeft: 8 }}>
-                  · {sentiment.pos} positive cues · {sentiment.neg} negative cues
+      {/* ── Sentiment Analysis (deep) ─────────────────────── */}
+      {(ai || regexSentiment.pos > 0 || regexSentiment.neg > 0) && (
+        <Section
+          title="Sentiment Analysis"
+          action={
+            <span style={{ fontSize: 10, color: "var(--muted)", letterSpacing: 0.5 }}>
+              {sentiment.source === "ai" ? "AI · transcript-deep" : "Heuristic"}
+            </span>
+          }
+        >
+          <div className="panel" style={{ padding: "20px 22px" }}>
+            <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, gap: 12, flexWrap: "wrap" }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+                <span style={{
+                  fontSize: 18, fontWeight: 700, color: sentiment.color,
+                }}>
+                  {sentiment.emoji} {sentiment.label}
                 </span>
+                {sentiment.source === "ai" && ai?.trajectory && (
+                  <span style={{
+                    fontSize: 10.5, padding: "3px 9px", borderRadius: 999,
+                    background: "var(--bg-2)", border: "1px solid var(--line)",
+                    color: "var(--text-2)", textTransform: "capitalize",
+                  }}>
+                    Trajectory: {ai.trajectory}
+                  </span>
+                )}
               </div>
-              <div style={{ fontSize: 11, color: "var(--muted)" }}>
-                {Math.round(sentiment.ratio * 100)}% positive
+              <div style={{ fontSize: 12, color: "var(--muted)" }} className="num">
+                {Math.round(sentiment.score)}/100
               </div>
             </div>
+
+            {/* gradient meter */}
             <div style={{
-              height: 6, borderRadius: 999, overflow: "hidden",
-              background: "rgba(201,125,125,0.18)",
-              position: "relative",
+              height: 8, borderRadius: 999, overflow: "hidden", position: "relative",
+              background: "linear-gradient(90deg, rgba(201,125,125,0.25), rgba(201,168,90,0.2), rgba(125,199,125,0.25))",
+              marginBottom: ai ? 16 : 0,
             }}>
               <div style={{
-                position: "absolute", left: 0, top: 0, bottom: 0,
-                width: `${sentiment.ratio * 100}%`,
-                background: "rgba(125,199,125,0.7)",
-                transition: "width 0.4s ease",
+                position: "absolute", top: -3, bottom: -3,
+                left: `calc(${Math.min(100, Math.max(0, sentiment.ratio * 100))}% - 2px)`,
+                width: 4, borderRadius: 2, background: sentiment.color,
+                boxShadow: `0 0 8px ${sentiment.color}`,
               }} />
+            </div>
+
+            {ai?.emotions && ai.emotions.length > 0 && (
+              <div style={{ display: "flex", gap: 6, flexWrap: "wrap", marginBottom: 14 }}>
+                {ai.emotions.map((e, i) => (
+                  <span key={i} style={{
+                    fontSize: 10.5, padding: "4px 10px", borderRadius: 999,
+                    background: "rgba(201,168,90,0.08)", border: "1px solid rgba(201,168,90,0.22)",
+                    color: "var(--text-2)", textTransform: "capitalize",
+                  }}>
+                    {e.replace(/_/g, " ")}
+                  </span>
+                ))}
+              </div>
+            )}
+
+            {ai?.rationale && (
+              <div style={{
+                fontSize: 13, lineHeight: 1.7, color: "var(--text)",
+                paddingLeft: 12, borderLeft: "2px solid var(--gold-dim)",
+                marginBottom: ai.moments && ai.moments.length > 0 ? 16 : 0,
+              }}>
+                {ai.rationale}
+              </div>
+            )}
+
+            {ai?.moments && ai.moments.length > 0 && (
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, fontWeight: 600 }}>
+                  Pivotal moments
+                </div>
+                {ai.moments.map((m, i) => (
+                  <div key={i} style={{
+                    padding: "10px 14px", borderRadius: 8,
+                    background: "var(--bg-2)", border: "1px solid var(--line)",
+                  }}>
+                    <div style={{ fontSize: 12.5, color: "var(--text)", fontStyle: "italic", marginBottom: 4 }}>
+                      &ldquo;{m.quote}&rdquo;
+                    </div>
+                    <div style={{ fontSize: 11.5, color: "var(--gold-2)" }}>→ {m.read}</div>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {sentiment.source === "regex" && (
+              <div style={{ fontSize: 11.5, color: "var(--muted)", marginTop: 10 }}>
+                {regexSentiment.pos} positive · {regexSentiment.neg} negative cues
+                (keyword heuristic — full AI read appears after enrichment).
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
+      {/* ── Motivation Analysis ───────────────────────────── */}
+      {motivation && (
+        <Section title="Motivation & Buying Intent">
+          <div className="panel" style={{ padding: "20px 22px" }}>
+            <div style={{
+              display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
+              gap: 10, marginBottom: 18,
+            }}>
+              <MotMetric label="Motivation" value={
+                typeof motivation.score === "number" ? `${Math.round(motivation.score)}/100` : "—"
+              } accent={
+                typeof motivation.score === "number"
+                  ? motivation.score >= 75 ? "#7dc77d" : motivation.score >= 50 ? "#c9a85a" : "#c97d7d"
+                  : "var(--muted)"
+              } />
+              <MotMetric label="Level" value={humanize(motivation.level)} accent="#c9a85a" />
+              <MotMetric label="Urgency" value={humanize(motivation.urgency)} accent="#b07ac7" />
+              <MotMetric label="Buying Stage" value={humanize(motivation.buying_stage)} accent="#7a9ac7" />
+            </div>
+
+            {motivation.signals && motivation.signals.length > 0 && (
+              <div style={{ marginBottom: motivation.objections && motivation.objections.length ? 18 : 0 }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, fontWeight: 600, marginBottom: 10 }}>
+                  Motivation signals
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {motivation.signals.map((s, i) => {
+                    const wColor = s.weight === "strong" ? "#7dc77d" : s.weight === "medium" ? "#c9a85a" : "var(--muted)";
+                    return (
+                      <div key={i} style={{
+                        padding: "10px 14px", borderRadius: 8,
+                        background: "var(--bg-2)", border: "1px solid var(--line)",
+                        borderLeft: `3px solid ${wColor}`,
+                      }}>
+                        <div style={{ display: "flex", justifyContent: "space-between", gap: 10, marginBottom: 3 }}>
+                          <span style={{ fontSize: 13, color: "var(--text)", fontWeight: 600 }}>{s.signal}</span>
+                          <span style={{ fontSize: 10, color: wColor, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+                            {s.weight}
+                          </span>
+                        </div>
+                        <div style={{ fontSize: 12, color: "var(--text-2)", lineHeight: 1.5 }}>{s.evidence}</div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {motivation.objections && motivation.objections.length > 0 && (
+              <div style={{ marginBottom: motivation.drivers && motivation.drivers.length ? 18 : 0 }}>
+                <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, fontWeight: 600, marginBottom: 10 }}>
+                  Objections / blockers
+                </div>
+                <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
+                  {motivation.objections.map((o, i) => {
+                    const sevColor = o.severity === "high" ? "#c97d7d" : o.severity === "medium" ? "#c9a85a" : "var(--muted)";
+                    return (
+                      <div key={i} style={{
+                        padding: "9px 14px", borderRadius: 8,
+                        background: "var(--bg-2)", border: "1px solid var(--line)",
+                        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+                      }}>
+                        <span style={{ fontSize: 12.5, color: "var(--text)" }}>{o.objection}</span>
+                        <span style={{ display: "flex", gap: 8, alignItems: "center", flexShrink: 0 }}>
+                          <span style={{ fontSize: 10, color: sevColor, textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 700 }}>
+                            {o.severity}
+                          </span>
+                          <span style={{
+                            fontSize: 10, padding: "2px 8px", borderRadius: 999,
+                            background: o.handled ? "rgba(125,199,125,0.12)" : "rgba(201,125,125,0.12)",
+                            color: o.handled ? "#7dc77d" : "#c97d7d",
+                            border: `1px solid ${o.handled ? "rgba(125,199,125,0.3)" : "rgba(201,125,125,0.3)"}`,
+                          }}>
+                            {o.handled ? "Handled" : "Open"}
+                          </span>
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {motivation.drivers && motivation.drivers.length > 0 && (
+              <div>
+                <div style={{ fontSize: 10, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 1, fontWeight: 600, marginBottom: 10 }}>
+                  Core buying drivers
+                </div>
+                <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+                  {motivation.drivers.map((d, i) => (
+                    <span key={i} style={{
+                      fontSize: 11.5, padding: "5px 11px", borderRadius: 999,
+                      background: "rgba(125,199,125,0.08)", border: "1px solid rgba(125,199,125,0.22)",
+                      color: "var(--text-2)",
+                    }}>
+                      {d}
+                    </span>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        </Section>
+      )}
+
+      {/* ── Sales Coaching ────────────────────────────────── */}
+      {coaching && (coaching.what_went_well?.length || coaching.what_to_improve?.length || coaching.recommended_next_step) && (
+        <Section title="Sales Coaching">
+          <div className="panel" style={{ padding: "20px 22px" }}>
+            {coaching.recommended_next_step && (
+              <div style={{
+                padding: "12px 16px", borderRadius: 8, marginBottom: 16,
+                background: "linear-gradient(135deg, rgba(201,168,90,0.08), rgba(201,168,90,0.02))",
+                border: "1px solid rgba(201,168,90,0.25)",
+              }}>
+                <div style={{ fontSize: 10, color: "var(--gold-2)", textTransform: "uppercase", letterSpacing: 1, fontWeight: 700, marginBottom: 4 }}>
+                  ★ Recommended next step
+                </div>
+                <div style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.6 }}>
+                  {coaching.recommended_next_step}
+                </div>
+              </div>
+            )}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(240px, 1fr))", gap: 12 }}>
+              {coaching.what_went_well && coaching.what_went_well.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 10, color: "#7dc77d", textTransform: "uppercase", letterSpacing: 1, fontWeight: 700, marginBottom: 8 }}>
+                    ✓ What went well
+                  </div>
+                  <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                    {coaching.what_went_well.map((w, i) => (
+                      <li key={i} style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.6, paddingLeft: 16, position: "relative", marginBottom: 6 }}>
+                        <span style={{ position: "absolute", left: 0, color: "#7dc77d" }}>·</span>{w}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
+              {coaching.what_to_improve && coaching.what_to_improve.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 10, color: "#c9a85a", textTransform: "uppercase", letterSpacing: 1, fontWeight: 700, marginBottom: 8 }}>
+                    ↑ What to improve
+                  </div>
+                  <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
+                    {coaching.what_to_improve.map((w, i) => (
+                      <li key={i} style={{ fontSize: 12.5, color: "var(--text-2)", lineHeight: 1.6, paddingLeft: 16, position: "relative", marginBottom: 6 }}>
+                        <span style={{ position: "absolute", left: 0, color: "#c9a85a" }}>·</span>{w}
+                      </li>
+                    ))}
+                  </ul>
+                </div>
+              )}
             </div>
           </div>
         </Section>

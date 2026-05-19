@@ -463,9 +463,20 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
               {calls.map((c) => {
                 const a = (c.analysis ?? {}) as Record<string, unknown>;
                 const siteVisit = a.site_visit_booked === true;
-                const sent = computeCallSentiment(c.transcript);
-                const motivation = c.lead_score ?? 0;
-                const motivationColor = motivation >= 80 ? "#7dc77d" : motivation >= 60 ? "#c9a85a" : motivation > 0 ? "#c97d7d" : "var(--muted)";
+                // Prefer deep AI sentiment from enrichment; fall back to keyword heuristic.
+                const aiSent = a.sentiment as { overall?: string } | null | undefined;
+                const sent = aiSent?.overall
+                  ? (aiSent.overall === "positive"
+                      ? { label: "Positive", color: "#7dc77d", emoji: "▲", pos: 0, neg: 0 }
+                      : aiSent.overall === "negative"
+                      ? { label: "Negative", color: "#c97d7d", emoji: "▼", pos: 0, neg: 0 }
+                      : aiSent.overall === "mixed"
+                      ? { label: "Mixed", color: "#c9a85a", emoji: "◆", pos: 0, neg: 0 }
+                      : { label: "Neutral", color: "var(--muted)", emoji: "•", pos: 0, neg: 0 })
+                  : computeCallSentiment(c.transcript);
+                const aiMot = a.motivation as { score?: number } | null | undefined;
+                const motivation = typeof aiMot?.score === "number" ? Math.round(aiMot.score) : (c.lead_score ?? 0);
+                const motivationColor = motivation >= 75 ? "#7dc77d" : motivation >= 50 ? "#c9a85a" : motivation > 0 ? "#c97d7d" : "var(--muted)";
                 return (
                   <Link
                     key={c.id}

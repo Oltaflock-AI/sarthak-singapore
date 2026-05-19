@@ -57,7 +57,17 @@ export function CallCard({ call }: Props) {
   const budget = get("budget_range");
   const timeline = get("timeline");
   const siteVisit = a["site_visit_booked"] === true;
-  const sentiment = sentimentOf(call.transcript);
+  // Prefer the deep AI sentiment from enrichment; fall back to keyword heuristic.
+  const aiSent = a["sentiment"] as { overall?: string } | null | undefined;
+  const sentiment = aiSent?.overall
+    ? (() => {
+        const o = aiSent.overall!;
+        if (o === "positive") return { label: "Positive", color: "#7dc77d", emoji: "▲" };
+        if (o === "negative") return { label: "Negative", color: "#c97d7d", emoji: "▼" };
+        if (o === "mixed") return { label: "Mixed", color: "#c9a85a", emoji: "◆" };
+        return { label: "Neutral", color: "var(--muted)", emoji: "•" };
+      })()
+    : sentimentOf(call.transcript);
 
   const score = call.lead_score ?? 0;
   const scoreColor = score >= 80 ? "#7dc77d" : score >= 60 ? "#c9a85a" : score > 0 ? "#c97d7d" : "var(--muted)";
