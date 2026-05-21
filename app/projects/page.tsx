@@ -69,7 +69,7 @@ export default function ProjectsPage() {
   }
 
   async function deleteProject(p: KbProject) {
-    if (!confirm(`Delete "${p.name}"? This removes it from Priya's KB.`)) return;
+    if (!confirm(`Delete "${p.name}"? This removes it from the voice agent's KB.`)) return;
     await fetch(`/api/kb?id=${p.id}`, { method: "DELETE" });
     refresh();
   }
@@ -89,7 +89,7 @@ export default function ProjectsPage() {
     <>
       <PageHeader
         title="Projects · Knowledge Base"
-        subtitle="Live KB Priya uses to answer WhatsApp leads. Edit a card to update what she knows."
+        subtitle="Live KB the voice agent uses on calls. Edit a card to update what it knows."
       />
 
       <div style={{ marginBottom: 16, display: "flex", justifyContent: "flex-end" }}>
@@ -256,12 +256,12 @@ function EditModal({
         </div>
 
         {field("hero", "Tagline (short)")}
-        {field("pricing_notes", "Pricing notes (Priya will quote this verbatim)", true)}
+        {field("pricing_notes", "Pricing notes (voice agent quotes this verbatim)", true)}
         {field("usps", "USPs", true)}
         {field("amenities", "Amenities", true)}
         {field("brochure_url", "Brochure URL")}
         {field("rera_number", "RERA Number")}
-        {field("custom_notes", "Custom notes (anything else Priya should know)", true)}
+        {field("custom_notes", "Custom notes (anything else the voice agent should know)", true)}
 
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 16 }}>
           <input
@@ -270,7 +270,7 @@ function EditModal({
             onChange={(e) => setForm({ ...form, is_active: e.target.checked })}
             id="active"
           />
-          <label htmlFor="active" style={{ fontSize: 13 }}>Active (visible to Priya)</label>
+          <label htmlFor="active" style={{ fontSize: 13 }}>Active (visible to voice agent)</label>
         </div>
 
         {err && <div style={{ color: "var(--hot)", marginBottom: 12, fontSize: 13 }}>{err}</div>}

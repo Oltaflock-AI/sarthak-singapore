@@ -66,7 +66,7 @@ export default function SiteVisitsPage() {
         {loading && visits.length === 0 ? (
           <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>Loading…</div>
         ) : visits.length === 0 ? (
-          <EmptyState title="No site visits yet" hint="Priya will auto-book when leads agree on a date" />
+          <EmptyState title="No site visits yet" hint="Visits booked on voice calls will appear here" />
         ) : (
           <table style={{ width: "100%", borderCollapse: "collapse" }}>
             <thead>

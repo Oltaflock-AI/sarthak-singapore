@@ -26,14 +26,6 @@ type Lead = {
   updated_at: string;
 };
 
-type WaMsg = {
-  id: string;
-  from_number: string;
-  name: string | null;
-  text_in: string | null;
-  text_out: string | null;
-  created_at: string;
-};
 
 const STATUS_OPTIONS = ["new", "qualified", "booked", "converted", "lost"] as const;
 
@@ -94,7 +86,7 @@ export default function LeadsPage() {
     <>
       <PageHeader
         title="Leads · CRM"
-        subtitle="Every contact across WhatsApp, Voice, and Web — live, scored, and routed."
+        subtitle="Every lead from the voice agent — live, scored, and routed."
       />
 
       {/* KPI strip */}
@@ -312,18 +304,12 @@ function fmtPhoneFull(p?: string | null): string {
 }
 
 function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
-  const [messages, setMessages] = useState<WaMsg[]>([]);
   const [calls, setCalls] = useState<CallSlim[]>([]);
   const [updating, setUpdating] = useState(false);
   const [localStatus, setLocalStatus] = useState(lead.status);
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    fetch(`/api/wa-messages?phone=${encodeURIComponent(lead.phone)}`)
-      .then((r) => r.json())
-      .then((d) => Array.isArray(d) && setMessages(d))
-      .catch(() => {});
-
     // Fetch all voice calls for this phone (try with + and without)
     const phoneClean = lead.phone.replace(/^\+/, "");
     supabase
@@ -435,9 +421,7 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
             <span>·</span>
             <span>Updated {timeAgo(lead.updated_at)}</span>
             <span>·</span>
-            <span>{calls.length} {calls.length === 1 ? "call" : "calls"}</span>
-            <span>·</span>
-            <span>{messages.length} WA {messages.length === 1 ? "message" : "messages"}</span>
+            <span>{calls.length} {calls.length === 1 ? "voice call" : "voice calls"}</span>
           </div>
         </div>
 
@@ -553,53 +537,6 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
           </>
         )}
 
-        {/* WhatsApp Conversation */}
-        {messages.length > 0 && (
-          <>
-            <SectionHeader title={`WhatsApp Conversation (${messages.length})`} />
-            <div style={{ padding: "0 28px 24px" }}>
-              <div style={{
-                display: "flex", flexDirection: "column", gap: 10, maxHeight: 360,
-                overflowY: "auto", padding: 14, background: "var(--bg-2)",
-                border: "1px solid var(--line)", borderRadius: 8,
-              }}>
-                {messages.slice().reverse().map((m) => (
-                  <div key={m.id} style={{ display: "flex", flexDirection: "column", gap: 6 }}>
-                    {m.text_in && (
-                      <div style={{ display: "flex", justifyContent: "flex-start" }}>
-                        <div style={{
-                          maxWidth: "80%", padding: "8px 12px", borderRadius: 10,
-                          background: "var(--panel)", border: "1px solid var(--line)",
-                          fontSize: 12.5, lineHeight: 1.5,
-                        }}>
-                          <div style={{ fontSize: 9.5, color: "var(--muted)", marginBottom: 3, fontWeight: 500 }}>
-                            {humanize(lead.name) !== "—" ? humanize(lead.name) : "Lead"} · {fmtDateTime(m.created_at)}
-                          </div>
-                          {m.text_in}
-                        </div>
-                      </div>
-                    )}
-                    {m.text_out && (
-                      <div style={{ display: "flex", justifyContent: "flex-end" }}>
-                        <div style={{
-                          maxWidth: "80%", padding: "8px 12px", borderRadius: 10,
-                          background: "rgba(201,168,90,0.08)", border: "1px solid rgba(201,168,90,0.25)",
-                          fontSize: 12.5, lineHeight: 1.5, color: "var(--text)",
-                        }}>
-                          <div style={{ fontSize: 9.5, color: "var(--gold-2)", marginBottom: 3, fontWeight: 500 }}>
-                            Priya · {timeAgo(m.created_at)}
-                          </div>
-                          {m.text_out}
-                        </div>
-                      </div>
-                    )}
-                  </div>
-                ))}
-              </div>
-            </div>
-          </>
-        )}
-
         {/* Notes */}
         {lead.notes && (
           <>
@@ -612,9 +549,9 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
           </>
         )}
 
-        {calls.length === 0 && messages.length === 0 && (
+        {calls.length === 0 && (
           <div style={{ padding: "0 28px 24px", fontSize: 12.5, color: "var(--muted)" }}>
-            No voice calls or WhatsApp messages yet for this lead.
+            No voice calls yet for this lead.
           </div>
         )}
 

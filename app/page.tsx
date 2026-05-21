@@ -6,9 +6,6 @@ import Link from "next/link";
 import { useLiveData } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { KpiCard } from "@/components/KpiCard";
-import { ScoreBadge } from "@/components/ScoreBadge";
-import { EmptyState } from "@/components/EmptyState";
-import { timeAgo, initials } from "@/lib/format";
 
 type Lead = {
   id: string;
@@ -44,12 +41,10 @@ const ICONS = {
   qualified: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 10l3.5 3.5L15 6.5" /></svg>,
   visits: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.6" /><path d="M3 8.5h14M7 3v3M13 3v3" /></svg>,
   conv: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l5-5 3 3 6-7" /><path d="M14 8h3v3" /></svg>,
-  voice: <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M5.5 3.5h2l1.2 3-1.4 1c.7 1.6 2 2.9 3.6 3.6l1-1.4 3 1.2v2c0 .8-.7 1.5-1.5 1.5-6 0-11-5-11-11 0-.8.7-1.5 1.5-1.5z" /></svg>,
-  whatsapp: <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round"><path d="M17 10a7 7 0 1 1-3.4-6L17 3l-1 3.4A7 7 0 0 1 17 10z" /></svg>,
 };
 
 export default function Overview() {
-  const { calls, waMessages } = useLiveData();
+  const { calls } = useLiveData();
   const [leads, setLeads] = useState<Lead[]>(() => cachedLeads);
   const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
   const chartRefs = useRef<{ project: unknown; source: unknown; status: unknown }>({ project: null, source: null, status: null });
@@ -112,24 +107,6 @@ export default function Overview() {
   const conversionRate = metrics.total > 0 ? Math.round((metrics.booked + metrics.converted) / metrics.total * 100) : 0;
   const qualificationRate = metrics.total > 0 ? Math.round((metrics.qualified + metrics.booked + metrics.converted) / metrics.total * 100) : 0;
   const avgScore = metrics.total > 0 ? Math.round(leads.reduce((a, l) => a + (l.lead_score ?? 0), 0) / metrics.total) : 0;
-
-  // Combined activity feed: leads + wa messages + visits
-  const feed = useMemo(() => {
-    type Item = { id: string; kind: "lead" | "wa" | "visit"; when: string; name: string; preview: string; score?: number };
-    const items: Item[] = [
-      ...waMessages.map<Item>((w) => ({
-        id: `w-${w.id}`, kind: "wa", when: w.created_at,
-        name: w.name ?? w.from_number ?? "Unknown",
-        preview: w.text_in ?? w.text_out?.slice(0, 80) ?? "",
-      })),
-      ...visits.map<Item>((v) => ({
-        id: `v-${v.id}`, kind: "visit", when: v.created_at,
-        name: v.lead_name ?? v.lead_phone,
-        preview: `Site visit booked · ${v.project ?? "—"}${v.scheduled_for_text ? " · " + v.scheduled_for_text : ""}`,
-      })),
-    ];
-    return items.sort((a, b) => new Date(b.when).getTime() - new Date(a.when).getTime()).slice(0, 14);
-  }, [waMessages, visits]);
 
   const renderCharts = () => {
     // @ts-expect-error CDN global
@@ -233,7 +210,7 @@ export default function Overview() {
 
       {/* Primary KPIs */}
       <div className="kpi-grid">
-        <KpiCard label="Total Leads" value={metrics.total} sub={`+${todayLeads} today · ${calls.length} voice · ${metrics.total - calls.length} WA`} icon={ICONS.leads} />
+        <KpiCard label="Total Leads" value={metrics.total} sub={`+${todayLeads} today · ${calls.length} voice calls`} icon={ICONS.leads} />
         <KpiCard label="Qualified" value={metrics.qualified + metrics.booked + metrics.converted} sub={`${qualificationRate}% qualification rate`} icon={ICONS.qualified} />
         <KpiCard label="Site Visits Booked" value={metrics.booked + metrics.converted} sub={`${todayBookings.length} booked today`} icon={ICONS.visits} />
         <KpiCard label="Conversion Rate" value={`${conversionRate}%`} sub={`${metrics.converted} converted · avg score ${avgScore}`} icon={ICONS.conv} />
@@ -263,7 +240,7 @@ export default function Overview() {
           <div className="panel-body flush">
             {upcomingVisits.length === 0 ? (
               <div style={{ padding: 24, color: "var(--muted)", fontSize: 12, textAlign: "center" }}>
-                No upcoming visits — Priya will book them as leads agree.
+                No upcoming visits — they appear here once scheduled.
               </div>
             ) : (
               <div className="row-stripe">

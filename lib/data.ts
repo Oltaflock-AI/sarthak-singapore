@@ -26,30 +26,19 @@ export interface CallRow {
   created_at: string;
 }
 
-export interface WaRow {
-  id: string;
-  wa_id: string | null;
-  from_number: string | null;
-  name: string | null;
-  text_in: string | null;
-  text_out: string | null;
-  created_at: string;
-}
-
 // ── Shared live-data hook (polls every 10s) ─────────────────────────────────
 export function useLiveData() {
   const [calls, setCalls] = useState<CallRow[]>([]);
-  const [waMessages, setWaMessages] = useState<WaRow[]>([]);
   const [loading, setLoading] = useState(true);
   const [lastSync, setLastSync] = useState<Date>(new Date());
 
   const refetch = async () => {
-    const [{ data: c }, { data: w }] = await Promise.all([
-      supabase.from("calls").select("*").order("created_at", { ascending: false }).limit(100),
-      supabase.from("wa_messages").select("*").order("created_at", { ascending: false }).limit(100),
-    ]);
+    const { data: c } = await supabase
+      .from("calls")
+      .select("*")
+      .order("created_at", { ascending: false })
+      .limit(100);
     setCalls((c as CallRow[]) ?? []);
-    setWaMessages((w as WaRow[]) ?? []);
     setLastSync(new Date());
     setLoading(false);
   };
@@ -60,7 +49,7 @@ export function useLiveData() {
     return () => clearInterval(id);
   }, []);
 
-  return { calls, waMessages, loading, lastSync, refetch };
+  return { calls, loading, lastSync, refetch };
 }
 
 // ── Derived stats helpers ───────────────────────────────────────────────────

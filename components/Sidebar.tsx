@@ -2,8 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useMemo } from "react";
-import { useLiveData, bucketByScore, type WaRow } from "@/lib/data";
+import { useLiveData, bucketByScore } from "@/lib/data";
 
 const ICONS = {
   overview: (
@@ -15,11 +14,6 @@ const ICONS = {
   voice: (
     <svg className="sb-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <path d="M5.5 3.5h2l1.2 3-1.4 1c.7 1.6 2 2.9 3.6 3.6l1-1.4 3 1.2v2c0 .8-.7 1.5-1.5 1.5-6 0-11-5-11-11 0-.8.7-1.5 1.5-1.5z" />
-    </svg>
-  ),
-  whatsapp: (
-    <svg className="sb-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M17 10a7 7 0 1 1-3.4-6L17 3l-1 3.4A7 7 0 0 1 17 10z" /><path d="M6.5 8.5c.4 1.7 1.8 3.1 3.5 3.5l1.5-1 2 .8.2 1.8a1 1 0 0 1-1 1.1A8 8 0 0 1 4.3 6.3a1 1 0 0 1 1.1-1l1.8.2.8 2-1 1.5z" />
     </svg>
   ),
   leads: (
@@ -41,28 +35,12 @@ const ICONS = {
 
 export function Sidebar() {
   const pathname = usePathname();
-  const { calls, waMessages } = useLiveData();
+  const { calls } = useLiveData();
   const { hot } = bucketByScore(calls);
-
-  // Unread = conversations whose latest message is inbound with no outbound reply yet.
-  const waUnread = useMemo(() => {
-    const latest = new Map<string, WaRow>();
-    for (const m of waMessages) {
-      const key = m.from_number ?? m.id;
-      const cur = latest.get(key);
-      if (!cur || new Date(m.created_at) > new Date(cur.created_at)) latest.set(key, m);
-    }
-    let n = 0;
-    for (const m of latest.values()) {
-      if (m.text_in && !m.text_out) n++;
-    }
-    return n;
-  }, [waMessages]);
 
   const links: { href: string; label: string; icon: React.ReactNode; count?: number; pulse?: boolean }[] = [
     { href: "/", label: "Overview", icon: ICONS.overview },
     { href: "/calls", label: "Voice Calls", icon: ICONS.voice, count: calls.length },
-    { href: "/whatsapp", label: "WhatsApp", icon: ICONS.whatsapp, count: waUnread > 0 ? waUnread : undefined, pulse: waUnread > 0 },
     { href: "/leads", label: "Leads", icon: ICONS.leads, count: hot.length, pulse: hot.length > 0 },
     { href: "/site-visits", label: "Site Visits", icon: ICONS.visits },
     { href: "/projects", label: "Projects · KB", icon: ICONS.projects },
