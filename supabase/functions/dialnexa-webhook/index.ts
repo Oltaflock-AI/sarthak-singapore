@@ -137,6 +137,9 @@ Deno.serve(async (req) => {
     return json({ ok: false, error: "invalid signature" }, 401);
   }
 
+  // Empty body = verification probe; ack with 200.
+  if (!rawBody.trim()) return json({ ok: true, verified: true });
+
   let body: Record<string, unknown>;
   try {
     body = JSON.parse(rawBody);
@@ -153,7 +156,9 @@ Deno.serve(async (req) => {
   const call_transfer = pick<Record<string, unknown>>(payload, ["call_transfer"]);
 
   const call_id = pick<string>(call, ["id", "call_id"]);
-  if (!call_id) return json({ ok: false, error: "missing call id" }, 400);
+  // No call id = DialNexa verification ping / health probe. Ack with 200 so the
+  // webhook-verify step passes; only real call events carry a call id.
+  if (!call_id) return json({ ok: true, verified: true });
 
   const status = pick<string>(call, ["status"]);
   const direction = (pick<string>(call, ["direction"]) ?? "outbound").toLowerCase();
