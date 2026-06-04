@@ -47,7 +47,7 @@ export default function Overview() {
   const { calls } = useLiveData();
   const [leads, setLeads] = useState<Lead[]>(() => cachedLeads);
   const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
-  const chartRefs = useRef<{ project: unknown; source: unknown; status: unknown }>({ project: null, source: null, status: null });
+  const chartRefs = useRef<{ source: unknown; status: unknown }>({ source: null, status: null });
 
   useEffect(() => {
     const fetchAll = async () => {
@@ -70,7 +70,6 @@ export default function Overview() {
   const metrics = useMemo(() => {
     const total = leads.length;
     let hot = 0, warm = 0, cold = 0, qualified = 0, booked = 0, converted = 0, lost = 0;
-    const projectCount = new Map<string, number>();
     const sourceCount = new Map<string, number>();
     for (const l of leads) {
       const s = (l.score_label ?? "WARM").toUpperCase();
@@ -81,11 +80,10 @@ export default function Overview() {
       else if (l.status === "booked") booked++;
       else if (l.status === "converted") converted++;
       else if (l.status === "lost") lost++;
-      if (l.project) projectCount.set(l.project, (projectCount.get(l.project) ?? 0) + 1);
       const src = l.source ?? "unknown";
       sourceCount.set(src, (sourceCount.get(src) ?? 0) + 1);
     }
-    return { total, hot, warm, cold, qualified, booked, converted, lost, projectCount, sourceCount };
+    return { total, hot, warm, cold, qualified, booked, converted, lost, sourceCount };
   }, [leads]);
 
   const todayBookings = useMemo(() => {
@@ -111,10 +109,9 @@ export default function Overview() {
   const renderCharts = () => {
     // @ts-expect-error CDN global
     if (typeof window === "undefined" || typeof window.Chart === "undefined") return;
-    const projectCtx = (document.getElementById("projectChart") as HTMLCanvasElement)?.getContext("2d");
     const sourceCtx = (document.getElementById("sourceChart") as HTMLCanvasElement)?.getContext("2d");
     const statusCtx = (document.getElementById("statusChart") as HTMLCanvasElement)?.getContext("2d");
-    if (!projectCtx || !sourceCtx || !statusCtx) return;
+    if (!sourceCtx || !statusCtx) return;
 
     // Read live theme tokens so charts adapt to light/dark.
     const css = getComputedStyle(document.documentElement);
@@ -124,35 +121,14 @@ export default function Overview() {
 
     // Cleanup
     // @ts-expect-error instance
-    chartRefs.current.project?.destroy?.();
-    // @ts-expect-error instance
     chartRefs.current.source?.destroy?.();
     // @ts-expect-error instance
     chartRefs.current.status?.destroy?.();
 
-    const projectEntries = Array.from(metrics.projectCount.entries()).sort((a, b) => b[1] - a[1]).slice(0, 6);
     const sourceEntries = Array.from(metrics.sourceCount.entries()).sort((a, b) => b[1] - a[1]);
 
-    const pLabels = projectEntries.length ? projectEntries.map(([k]) => k) : ["No leads yet"];
-    const pValues = projectEntries.length ? projectEntries.map(([, v]) => v) : [0];
     const sLabels = sourceEntries.length ? sourceEntries.map(([k, v]) => `${k} · ${v}`) : ["—"];
     const sValues = sourceEntries.length ? sourceEntries.map(([, v]) => v) : [1];
-
-    // @ts-expect-error CDN
-    chartRefs.current.project = new window.Chart(projectCtx, {
-      type: "bar",
-      data: { labels: pLabels, datasets: [{ data: pValues, backgroundColor: ["#c9a85a", "#b8975a", "#a78657", "#8a7440", "#6e5d33", "#544626"], borderRadius: 6, barThickness: 20 }] },
-      options: {
-        indexAxis: "y",
-        plugins: { legend: { display: false }, tooltip: { backgroundColor: cPanel, titleColor: cText, bodyColor: cText2, borderColor: cLine, borderWidth: 1, padding: 10, cornerRadius: 6, displayColors: false } },
-        scales: {
-          x: { grid: { color: cLine }, ticks: { color: cMuted, font: { size: 11 }, precision: 0 }, border: { display: false } },
-          y: { grid: { display: false }, ticks: { color: cText2, font: { size: 12, weight: 500 } }, border: { display: false } },
-        },
-        maintainAspectRatio: false,
-        animation: { duration: 600 },
-      },
-    });
 
     // @ts-expect-error CDN
     chartRefs.current.source = new window.Chart(sourceCtx, {
@@ -272,14 +248,7 @@ export default function Overview() {
       </div>
 
       {/* Charts row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1.3fr 1fr 1fr", gap: 14, marginBottom: 22 }}>
-        <div className="panel">
-          <div className="panel-head">
-            <div className="panel-title">Demand by Project</div>
-            <div className="panel-sub num">{metrics.total} leads</div>
-          </div>
-          <div className="panel-body"><div style={{ height: 240 }}><canvas id="projectChart" /></div></div>
-        </div>
+      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 22 }}>
         <div className="panel">
           <div className="panel-head">
             <div className="panel-title">Source Mix</div>
