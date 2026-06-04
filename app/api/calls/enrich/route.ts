@@ -90,13 +90,22 @@ export async function POST(req: NextRequest) {
     .map((t) => `${(t.speaker ?? "speaker").toUpperCase()}: ${t.text ?? ""}`)
     .join("\n");
 
+  // Anchor relative dates ("tomorrow 2pm") to the call's real IST timestamp so the
+  // model resolves site_visit_datetime to an actual calendar date, not a guess.
+  const callIst = new Date(call.created_at as string).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  const dateContext = `This call took place on ${callIst} IST. Resolve any relative dates the caller mentions (e.g. "tomorrow", "Saturday", "agle hafte") against THIS date when filling site_visit_datetime — output a full absolute ISO 8601 timestamp with the correct year. Never guess the year.\n\nTranscript:\n`;
+
   try {
     const response = await openai.chat.completions.create({
       model: "gpt-4.1-mini",
       response_format: { type: "json_object" },
       messages: [
         { role: "system", content: ENRICH_PROMPT },
-        { role: "user", content: transcriptText },
+        { role: "user", content: dateContext + transcriptText },
       ],
       max_tokens: 1600,
       temperature: 0.2,
