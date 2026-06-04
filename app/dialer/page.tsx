@@ -77,6 +77,13 @@ function StatusBadge({ status }: { status: string }) {
   );
 }
 
+const KEYPAD: { d: string; sub?: string }[] = [
+  { d: "1" }, { d: "2", sub: "ABC" }, { d: "3", sub: "DEF" },
+  { d: "4", sub: "GHI" }, { d: "5", sub: "JKL" }, { d: "6", sub: "MNO" },
+  { d: "7", sub: "PQRS" }, { d: "8", sub: "TUV" }, { d: "9", sub: "WXYZ" },
+  { d: "*" }, { d: "0", sub: "+" }, { d: "#" },
+];
+
 const btn = (primary = false): React.CSSProperties => ({
   padding: "9px 16px",
   borderRadius: 8,
@@ -95,12 +102,13 @@ export default function DialerPage() {
   const [numErr, setNumErr] = useState<string | null>(null);
   const [phoneId, setPhoneId] = useState<string>("");
 
-  // single call
+  // single call (keypad)
   const [sName, setSName] = useState("");
   const [sPhone, setSPhone] = useState("");
-  const [sProject, setSProject] = useState("");
   const [singleMsg, setSingleMsg] = useState<string | null>(null);
   const [singleBusy, setSingleBusy] = useState(false);
+  const zeroHold = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const zeroLong = useRef(false);
 
   // bulk
   const [bulkText, setBulkText] = useState("");
@@ -178,13 +186,12 @@ export default function DialerPage() {
         body: JSON.stringify({
           to_number: sPhone,
           lead_name: sName || null,
-          project: sProject || null,
           agent_phone_number_id: phoneId,
         }),
       }).then((x) => x.json());
       if (r?.ok) {
         setSingleMsg(`Calling ${sName || sPhone}… (conversation ${r.conversation_id ?? "—"})`);
-        setSName(""); setSPhone(""); setSProject("");
+        setSName(""); setSPhone("");
         await refetchBatch(r.batch_id);
         setBatch((b) => b ?? { id: r.batch_id, label: "Single", status: "running", concurrency: 1 });
         startLoop(r.batch_id);
@@ -229,6 +236,23 @@ export default function DialerPage() {
     if (action === "resume" && b?.status === "running") startLoop(batch.id);
   }
 
+  // keypad input
+  const press = (d: string) => setSPhone((p) => p + d);
+  const backspace = () => setSPhone((p) => p.slice(0, -1));
+  const clearAll = () => setSPhone("");
+  // tap 0 → "0"; long-press 0 → "+"
+  const zeroDown = () => {
+    zeroLong.current = false;
+    zeroHold.current = setTimeout(() => {
+      zeroLong.current = true;
+      setSPhone((p) => p + "+");
+    }, 450);
+  };
+  const zeroUp = () => {
+    if (zeroHold.current) clearTimeout(zeroHold.current);
+    if (!zeroLong.current) setSPhone((p) => p + "0");
+  };
+
   const counts = useMemo(() => {
     const c = { queued: 0, dialing: 0, completed: 0, failed: 0, canceled: 0 };
     for (const r of rows) c[r.status as keyof typeof c] = (c[r.status as keyof typeof c] ?? 0) + 1;
@@ -269,17 +293,134 @@ export default function DialerPage() {
       </div>
 
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, alignItems: "start" }}>
-        {/* Single call */}
+        {/* Single call — keypad */}
         <div className="panel">
-          <div className="panel-head"><span className="panel-title">Single call</span></div>
-          <div className="panel-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <input style={inputStyle} placeholder="Lead name (optional)" value={sName} onChange={(e) => setSName(e.target.value)} />
-            <input style={inputStyle} placeholder="Phone (+91… or 10-digit)" value={sPhone} onChange={(e) => setSPhone(e.target.value)} />
-            <input style={inputStyle} placeholder="Project (optional)" value={sProject} onChange={(e) => setSProject(e.target.value)} />
-            <button style={{ ...btn(true), opacity: !sPhone.trim() || !phoneId || singleBusy ? 0.5 : 1 }} disabled={!sPhone.trim() || !phoneId || singleBusy} onClick={placeSingle}>
-              {singleBusy ? "Dialing…" : "Call now"}
-            </button>
-            {singleMsg && <div style={{ fontSize: 12, color: "var(--text-2)" }}>{singleMsg}</div>}
+          <div className="panel-head"><span className="panel-title">Keypad · test call</span></div>
+          <div className="panel-body" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+            <input
+              style={{ ...inputStyle, maxWidth: 300 }}
+              placeholder="Lead name (optional)"
+              value={sName}
+              onChange={(e) => setSName(e.target.value)}
+            />
+
+            {/* number display */}
+            <div style={{ minHeight: 44, display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+              <input
+                value={sPhone}
+                onChange={(e) => setSPhone(e.target.value)}
+                placeholder="Enter a number"
+                inputMode="tel"
+                style={{
+                  background: "transparent",
+                  border: "none",
+                  outline: "none",
+                  textAlign: "center",
+                  fontSize: 32,
+                  fontWeight: 500,
+                  letterSpacing: 1,
+                  color: "var(--text)",
+                  width: "100%",
+                  fontVariantNumeric: "tabular-nums",
+                }}
+              />
+            </div>
+
+            {/* keypad grid */}
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 72px)", gap: 14, justifyContent: "center" }}>
+              {KEYPAD.map((k) => {
+                const isZero = k.d === "0";
+                return (
+                  <button
+                    key={k.d}
+                    onClick={isZero ? undefined : () => press(k.d)}
+                    onPointerDown={isZero ? zeroDown : undefined}
+                    onPointerUp={isZero ? zeroUp : undefined}
+                    onPointerLeave={isZero ? () => { if (zeroHold.current) clearTimeout(zeroHold.current); } : undefined}
+                    style={{
+                      width: 72,
+                      height: 72,
+                      borderRadius: "50%",
+                      border: "1px solid var(--line)",
+                      background: "var(--bg-2)",
+                      color: "var(--text)",
+                      cursor: "pointer",
+                      display: "flex",
+                      flexDirection: "column",
+                      alignItems: "center",
+                      justifyContent: "center",
+                      gap: 1,
+                      transition: "background 0.1s",
+                      userSelect: "none",
+                    }}
+                    onMouseDown={(e) => (e.currentTarget.style.background = "var(--panel-3)")}
+                    onMouseUp={(e) => (e.currentTarget.style.background = "var(--bg-2)")}
+                    onMouseLeave={(e) => (e.currentTarget.style.background = "var(--bg-2)")}
+                  >
+                    <span style={{ fontSize: 26, fontWeight: 500, lineHeight: 1 }}>{k.d}</span>
+                    {k.sub && <span style={{ fontSize: 9, letterSpacing: 1.5, color: "var(--muted)" }}>{k.sub}</span>}
+                  </button>
+                );
+              })}
+            </div>
+
+            {/* call row: call button + backspace */}
+            <div style={{ display: "grid", gridTemplateColumns: "72px 72px 72px", gap: 14, alignItems: "center", justifyContent: "center" }}>
+              <span />
+              <button
+                disabled={!sPhone.trim() || !phoneId || singleBusy}
+                onClick={placeSingle}
+                title={!phoneId ? "Select a voice number first" : "Call"}
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: "50%",
+                  border: "none",
+                  background: !sPhone.trim() || !phoneId || singleBusy ? "var(--line)" : "var(--hot)",
+                  color: "#0a0908",
+                  cursor: !sPhone.trim() || !phoneId || singleBusy ? "default" : "pointer",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                  boxShadow: !sPhone.trim() || !phoneId || singleBusy ? "none" : "0 4px 14px -2px var(--hot-soft)",
+                }}
+              >
+                {singleBusy ? (
+                  <span style={{ fontSize: 11, fontWeight: 600 }}>…</span>
+                ) : (
+                  <svg width="26" height="26" viewBox="0 0 20 20" fill="currentColor">
+                    <path d="M5.5 3.5h2l1.2 3-1.4 1c.7 1.6 2 2.9 3.6 3.6l1-1.4 3 1.2v2c0 .8-.7 1.5-1.5 1.5-6 0-11-5-11-11 0-.8.7-1.5 1.5-1.5z" />
+                  </svg>
+                )}
+              </button>
+              <button
+                onClick={backspace}
+                onDoubleClick={clearAll}
+                aria-label="Backspace"
+                style={{
+                  width: 72,
+                  height: 72,
+                  borderRadius: "50%",
+                  border: "none",
+                  background: "transparent",
+                  color: sPhone ? "var(--text-2)" : "transparent",
+                  cursor: sPhone ? "pointer" : "default",
+                  display: "flex",
+                  alignItems: "center",
+                  justifyContent: "center",
+                }}
+              >
+                <svg width="24" height="24" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round">
+                  <path d="M21 5H8.5L3 12l5.5 7H21a1 1 0 0 0 1-1V6a1 1 0 0 0-1-1z" />
+                  <path d="M12 9.5l4 4M16 9.5l-4 4" />
+                </svg>
+              </button>
+            </div>
+
+            <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
+              Tap a 10-digit number (auto +91) or hold <strong>0</strong> for <strong>+</strong>. Double-tap ⌫ to clear.
+            </div>
+            {singleMsg && <div style={{ fontSize: 12, color: "var(--text-2)", textAlign: "center" }}>{singleMsg}</div>}
           </div>
         </div>
 
