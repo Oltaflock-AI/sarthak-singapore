@@ -141,14 +141,26 @@ export async function POST(req: NextRequest) {
       .single();
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
 
-    // Also upsert into leads CRM table so it shows up on /leads
+    // Also upsert into leads CRM table so it shows up on /leads.
+    // Canonicalize to +E.164 so this matches the webhook's key and never forks
+    // into a second (unprefixed) lead row. Collapse any legacy unprefixed row.
     if (call.lead_phone) {
-      const phone = String(call.lead_phone).replace(/^\+/, "");
-      const { data: existingLead } = await supabase
+      const digits = String(call.lead_phone).replace(/[^\d]/g, "");
+      const phone = digits ? `+${digits}` : String(call.lead_phone);
+      const legacyPhone = phone.replace(/^\+/, "");
+
+      const { data: rows } = await supabase
         .from("leads")
         .select("*")
-        .eq("phone", phone)
-        .maybeSingle();
+        .in("phone", [phone, legacyPhone]);
+      const existingLead =
+        rows?.find((r) => r.phone === phone) ??
+        rows?.find((r) => r.phone === legacyPhone) ??
+        null;
+      // Drop the legacy unprefixed duplicate before writing the canonical row.
+      if (legacyPhone !== phone) {
+        await supabase.from("leads").delete().eq("phone", legacyPhone);
+      }
 
       let status = existingLead?.status ?? "new";
       if (parsed.site_visit_booked) status = "booked";
@@ -164,7 +176,7 @@ export async function POST(req: NextRequest) {
         budget: parsed.budget ?? existingLead?.budget ?? null,
         lead_score: Math.max(parsed.lead_score ?? 50, existingLead?.lead_score ?? 0),
         score_label: parsed.score_label ?? existingLead?.score_label ?? "WARM",
-        source: existingLead?.source ?? "voice",
+        source: existingLead?.source ?? "voice_agent",
         status,
       }, { onConflict: "phone" });
     }
