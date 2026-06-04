@@ -2,6 +2,7 @@
 
 import { useEffect, useState } from "react";
 import { createClient } from "@supabase/supabase-js";
+import { DASHBOARD_SINCE } from "./config";
 
 export const supabase = createClient(
   process.env.NEXT_PUBLIC_SUPABASE_URL!,
@@ -33,11 +34,13 @@ export function useLiveData() {
   const [lastSync, setLastSync] = useState<Date>(new Date());
 
   const refetch = async () => {
-    const { data: c } = await supabase
+    let q = supabase
       .from("calls")
       .select("*")
       .order("created_at", { ascending: false })
       .limit(100);
+    if (DASHBOARD_SINCE) q = q.gte("created_at", DASHBOARD_SINCE);
+    const { data: c } = await q;
     setCalls((c as CallRow[]) ?? []);
     setLastSync(new Date());
     setLoading(false);

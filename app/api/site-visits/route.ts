@@ -1,11 +1,14 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
+import { DASHBOARD_SINCE } from "@/lib/config";
 
 export async function GET() {
-  const { data, error } = await supabase
+  let q = supabase
     .from("site_visits")
     .select("*")
     .order("created_at", { ascending: false });
+  if (DASHBOARD_SINCE) q = q.gte("created_at", DASHBOARD_SINCE);
+  const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
   return NextResponse.json(data);
 }
