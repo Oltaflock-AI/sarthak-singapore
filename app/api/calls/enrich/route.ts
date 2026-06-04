@@ -223,7 +223,15 @@ export async function POST(req: NextRequest) {
         if (parsed.lead_name ?? existingLead?.name) visitRow.lead_name = parsed.lead_name ?? existingLead?.name;
         if (parsed.project ?? existingLead?.project) visitRow.project = parsed.project ?? existingLead?.project;
         if (whenIso) visitRow.scheduled_for = whenIso;
-        if (startSrc) visitRow.scheduled_for_text = startSrc;
+        // Human-readable IST for the dashboard (e.g. "Fri 5 Jun, 2:00 PM").
+        if (whenIso) {
+          visitRow.scheduled_for_text = new Date(whenIso).toLocaleString("en-IN", {
+            timeZone: "Asia/Kolkata", weekday: "short", day: "numeric",
+            month: "short", hour: "numeric", minute: "2-digit", hour12: true,
+          });
+        } else if (startSrc) {
+          visitRow.scheduled_for_text = startSrc;
+        }
         const { error: visitErr } = await supabase
           .from("site_visits")
           .upsert(visitRow, { onConflict: "call_id" });
