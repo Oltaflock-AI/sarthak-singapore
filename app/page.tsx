@@ -102,6 +102,14 @@ export default function Overview() {
     return leads.filter((l) => new Date(l.created_at) >= today).length;
   }, [leads]);
 
+  const priorityLeads = useMemo(() => {
+    const terminal = new Set(["booked", "converted", "lost"]);
+    return [...leads]
+      .filter((l) => !terminal.has(l.status))
+      .sort((a, b) => (b.lead_score ?? 0) - (a.lead_score ?? 0))
+      .slice(0, 6);
+  }, [leads]);
+
   const conversionRate = metrics.total > 0 ? Math.round((metrics.booked + metrics.converted) / metrics.total * 100) : 0;
   const qualificationRate = metrics.total > 0 ? Math.round((metrics.qualified + metrics.booked + metrics.converted) / metrics.total * 100) : 0;
   const avgScore = metrics.total > 0 ? Math.round(leads.reduce((a, l) => a + (l.lead_score ?? 0), 0) / metrics.total) : 0;
@@ -200,6 +208,49 @@ export default function Overview() {
         <KpiCard label="Qualified" value={metrics.qualified + metrics.booked + metrics.converted} sub={`${qualificationRate}% qualification rate`} icon={ICONS.qualified} />
         <KpiCard label="Site Visits Booked" value={metrics.booked + metrics.converted} sub={`${todayBookings.length} booked today`} icon={ICONS.visits} />
         <KpiCard label="Conversion Rate" value={`${conversionRate}%`} sub={`${metrics.converted} converted · avg score ${avgScore}`} icon={ICONS.conv} />
+      </div>
+
+      {/* Priority leads — act now */}
+      <div className="panel" style={{ marginBottom: 22 }}>
+        <div className="panel-head">
+          <div className="panel-title">Priority Leads · follow up</div>
+          <Link href="/leads" className="panel-sub" style={{ color: "var(--gold-2)" }}>All leads →</Link>
+        </div>
+        <div className="panel-body flush">
+          {priorityLeads.length === 0 ? (
+            <div style={{ padding: 24, color: "var(--muted)", fontSize: 12, textAlign: "center" }}>
+              No open leads — new ones appear here ranked by score.
+            </div>
+          ) : (
+            <div className="row-stripe">
+              {priorityLeads.map((l) => {
+                const s = (l.score_label ?? "WARM").toUpperCase();
+                const variant = s === "HOT" ? "hot" : s === "COLD" ? "cold" : "warm";
+                const initials = (l.name ?? "?").trim().slice(0, 1).toUpperCase() || "?";
+                return (
+                  <div key={l.id} style={{ padding: "11px 16px", display: "flex", alignItems: "center", gap: 12 }}>
+                    <div className="avatar sm">{initials}</div>
+                    <div style={{ minWidth: 0, flex: 1 }}>
+                      <div style={{ fontWeight: 600, fontSize: 13, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+                        {l.name ?? l.phone}
+                      </div>
+                      <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2, textTransform: "capitalize" }}>
+                        {l.status?.replace(/_/g, " ") ?? "new"} · {l.source?.replace(/_/g, " ")}
+                      </div>
+                    </div>
+                    <span className={`score ${variant}`}>{s} · {l.lead_score ?? 0}</span>
+                    <a href={`tel:${l.phone}`} style={{
+                      flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 5,
+                      padding: "6px 12px", borderRadius: 7, textDecoration: "none",
+                      background: "var(--gold-soft)", border: "1px solid var(--gold-dim)",
+                      color: "var(--gold-2)", fontSize: 11.5, fontWeight: 600,
+                    }}>☎ Call</a>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
       </div>
 
       {/* Score distribution + Today highlights */}

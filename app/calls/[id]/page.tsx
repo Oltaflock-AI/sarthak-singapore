@@ -117,22 +117,49 @@ function computeSentiment(transcript: CallRow["transcript"]) {
 }
 
 // ── UI bits ────────────────────────────────────────────────────────────────
-function Section({ title, action, children }: { title: string; action?: React.ReactNode; children: React.ReactNode }) {
+function Section({
+  title, action, children, collapsible = false, defaultOpen = true, hint,
+}: {
+  title: string;
+  action?: React.ReactNode;
+  children: React.ReactNode;
+  collapsible?: boolean;
+  defaultOpen?: boolean;
+  hint?: React.ReactNode;
+}) {
+  const [open, setOpen] = useState(defaultOpen);
+  const heading = (
+    <div style={{
+      fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase",
+      letterSpacing: 1.4, fontWeight: 600, display: "flex", alignItems: "center", gap: 8,
+    }}>
+      {collapsible && (
+        <span style={{ fontSize: 9, color: "var(--gold-2)", transition: "transform 0.15s", display: "inline-block", transform: open ? "rotate(90deg)" : "none" }}>▶</span>
+      )}
+      {title}
+      {collapsible && hint && !open && (
+        <span style={{ textTransform: "none", letterSpacing: 0, color: "var(--dim)", fontWeight: 500 }}>· {hint}</span>
+      )}
+    </div>
+  );
   return (
     <div style={{ marginBottom: 26 }}>
       <div style={{
         display: "flex", alignItems: "center", justifyContent: "space-between",
-        marginBottom: 12, paddingLeft: 2,
+        marginBottom: open ? 12 : 0, paddingLeft: 2,
       }}>
-        <div style={{
-          fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase",
-          letterSpacing: 1.4, fontWeight: 600,
-        }}>
-          {title}
-        </div>
+        {collapsible ? (
+          <button
+            type="button"
+            onClick={() => setOpen((v) => !v)}
+            style={{ background: "none", border: "none", padding: 0, cursor: "pointer", display: "flex", alignItems: "center" }}
+          >
+            {heading}
+          </button>
+        ) : heading}
         {action}
       </div>
-      {children}
+      {(!collapsible || open) && children}
     </div>
   );
 }
@@ -368,6 +395,38 @@ export default function CallDetailPage() {
         </div>
       </div>
 
+      {/* ── Next-step action strip ────────────────────────── */}
+      {(() => {
+        const step = coaching?.recommended_next_step || humanize(analysis.next_action);
+        if (!step || step === "—") return null;
+        return (
+          <div style={{
+            display: "flex", alignItems: "center", justifyContent: "space-between", gap: 16, flexWrap: "wrap",
+            padding: "14px 18px", marginBottom: 22, borderRadius: 10,
+            background: "linear-gradient(135deg, rgba(201,168,90,0.12), rgba(201,168,90,0.03))",
+            border: "1px solid rgba(201,168,90,0.3)",
+          }}>
+            <div style={{ minWidth: 0, flex: 1 }}>
+              <div style={{ fontSize: 10, color: "var(--gold-2)", textTransform: "uppercase", letterSpacing: 1.2, fontWeight: 700, marginBottom: 4 }}>
+                ★ Next step
+              </div>
+              <div style={{ fontSize: 13.5, color: "var(--text)", lineHeight: 1.5 }}>{step}</div>
+            </div>
+            {call.lead_phone && (
+              <a href={`tel:${call.lead_phone}`} style={{
+                flexShrink: 0, display: "inline-flex", alignItems: "center", gap: 8,
+                padding: "9px 16px", borderRadius: 8, textDecoration: "none",
+                background: "linear-gradient(135deg, var(--gold), var(--gold-dim))",
+                color: "#1a1611", fontSize: 13, fontWeight: 600, letterSpacing: 0.2,
+                boxShadow: "0 4px 12px -2px rgba(201,168,90,0.35)",
+              }}>
+                ☎ Call back
+              </a>
+            )}
+          </div>
+        );
+      })()}
+
       {/* ── KPI Strip ─────────────────────────────────────── */}
       <div style={{
         display: "grid",
@@ -532,6 +591,9 @@ export default function CallDetailPage() {
       {(ai || regexSentiment.pos > 0 || regexSentiment.neg > 0) && (
         <Section
           title="Sentiment Analysis"
+          collapsible
+          defaultOpen={false}
+          hint={`${sentiment.label} · ${Math.round(sentiment.score)}/100`}
           action={
             <span style={{ fontSize: 10, color: "var(--muted)", letterSpacing: 0.5 }}>
               {sentiment.source === "ai" ? "AI · transcript-deep" : "Heuristic"}
@@ -630,7 +692,12 @@ export default function CallDetailPage() {
 
       {/* ── Motivation Analysis ───────────────────────────── */}
       {motivation && (
-        <Section title="Motivation & Buying Intent">
+        <Section
+          title="Motivation & Buying Intent"
+          collapsible
+          defaultOpen={false}
+          hint={`${humanize(motivation.level)}${motivation.urgency ? ` · ${humanize(motivation.urgency)}` : ""}`}
+        >
           <div className="panel" style={{ padding: "20px 22px" }}>
             <div style={{
               display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))",
@@ -787,7 +854,7 @@ export default function CallDetailPage() {
 
       {/* ── Key Signals ───────────────────────────────────── */}
       {Array.isArray(analysis.key_points) && analysis.key_points.length > 0 && (
-        <Section title="Key Signals">
+        <Section title="Key Signals" collapsible defaultOpen={false} hint={`${analysis.key_points.length} point${analysis.key_points.length === 1 ? "" : "s"}`}>
           <div className="panel" style={{ padding: "18px 22px" }}>
             <ul style={{ margin: 0, padding: 0, listStyle: "none" }}>
               {analysis.key_points.map((p, i) => (
