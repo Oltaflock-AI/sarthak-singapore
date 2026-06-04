@@ -116,6 +116,12 @@ export default function Overview() {
     const statusCtx = (document.getElementById("statusChart") as HTMLCanvasElement)?.getContext("2d");
     if (!projectCtx || !sourceCtx || !statusCtx) return;
 
+    // Read live theme tokens so charts adapt to light/dark.
+    const css = getComputedStyle(document.documentElement);
+    const tok = (n: string) => css.getPropertyValue(n).trim();
+    const cPanel = tok("--panel"), cText = tok("--text"), cText2 = tok("--text-2"),
+      cMuted = tok("--muted"), cLine = tok("--line");
+
     // Cleanup
     // @ts-expect-error instance
     chartRefs.current.project?.destroy?.();
@@ -138,10 +144,10 @@ export default function Overview() {
       data: { labels: pLabels, datasets: [{ data: pValues, backgroundColor: ["#c9a85a", "#b8975a", "#a78657", "#8a7440", "#6e5d33", "#544626"], borderRadius: 6, barThickness: 20 }] },
       options: {
         indexAxis: "y",
-        plugins: { legend: { display: false }, tooltip: { backgroundColor: "#14130f", titleColor: "#f5f2ea", bodyColor: "#c9c3b3", borderColor: "#28251e", borderWidth: 1, padding: 10, cornerRadius: 6, displayColors: false } },
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: cPanel, titleColor: cText, bodyColor: cText2, borderColor: cLine, borderWidth: 1, padding: 10, cornerRadius: 6, displayColors: false } },
         scales: {
-          x: { grid: { color: "#1c1a14" }, ticks: { color: "#7d7665", font: { size: 11 }, precision: 0 }, border: { display: false } },
-          y: { grid: { display: false }, ticks: { color: "#c9c3b3", font: { size: 12, weight: 500 } }, border: { display: false } },
+          x: { grid: { color: cLine }, ticks: { color: cMuted, font: { size: 11 }, precision: 0 }, border: { display: false } },
+          y: { grid: { display: false }, ticks: { color: cText2, font: { size: 12, weight: 500 } }, border: { display: false } },
         },
         maintainAspectRatio: false,
         animation: { duration: 600 },
@@ -155,8 +161,8 @@ export default function Overview() {
       options: {
         cutout: "68%",
         plugins: {
-          legend: { position: "right", labels: { color: "#c9c3b3", font: { size: 12 }, padding: 14, boxWidth: 10, boxHeight: 10, usePointStyle: true } },
-          tooltip: { backgroundColor: "#14130f", titleColor: "#f5f2ea", bodyColor: "#c9c3b3", borderColor: "#28251e", borderWidth: 1, padding: 10, cornerRadius: 6 },
+          legend: { position: "right", labels: { color: cText2, font: { size: 12 }, padding: 14, boxWidth: 10, boxHeight: 10, usePointStyle: true } },
+          tooltip: { backgroundColor: cPanel, titleColor: cText, bodyColor: cText2, borderColor: cLine, borderWidth: 1, padding: 10, cornerRadius: 6 },
         },
         maintainAspectRatio: false,
         animation: { duration: 600 },
@@ -176,10 +182,10 @@ export default function Overview() {
       type: "bar",
       data: { labels: funnelLabels, datasets: [{ data: funnelValues, backgroundColor: ["#7d7665", "#b8975a", "#c9a85a", "#e8c87a"], borderRadius: 6, barThickness: 38 }] },
       options: {
-        plugins: { legend: { display: false }, tooltip: { backgroundColor: "#14130f", titleColor: "#f5f2ea", bodyColor: "#c9c3b3", borderColor: "#28251e", borderWidth: 1, padding: 10, cornerRadius: 6, displayColors: false } },
+        plugins: { legend: { display: false }, tooltip: { backgroundColor: cPanel, titleColor: cText, bodyColor: cText2, borderColor: cLine, borderWidth: 1, padding: 10, cornerRadius: 6, displayColors: false } },
         scales: {
-          y: { grid: { color: "#1c1a14" }, ticks: { color: "#7d7665", font: { size: 11 }, precision: 0 }, border: { display: false } },
-          x: { grid: { display: false }, ticks: { color: "#c9c3b3", font: { size: 12, weight: 500 } }, border: { display: false } },
+          y: { grid: { color: cLine }, ticks: { color: cMuted, font: { size: 11 }, precision: 0 }, border: { display: false } },
+          x: { grid: { display: false }, ticks: { color: cText2, font: { size: 12, weight: 500 } }, border: { display: false } },
         },
         maintainAspectRatio: false,
         animation: { duration: 600 },
@@ -194,6 +200,10 @@ export default function Overview() {
     if (typeof window !== "undefined" && window.Chart) {
       renderCharts();
     }
+    // Re-render with fresh tokens whenever the theme is toggled.
+    const onTheme = () => renderCharts();
+    window.addEventListener("themechange", onTheme);
+    return () => window.removeEventListener("themechange", onTheme);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [metrics]);
 

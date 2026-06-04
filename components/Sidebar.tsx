@@ -3,6 +3,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { useLiveData, bucketByScore } from "@/lib/data";
+import { ThemeToggle } from "@/components/ThemeToggle";
 
 const ICONS = {
   overview: (
@@ -26,6 +27,12 @@ const ICONS = {
       <rect x="3" y="4" width="14" height="13" rx="1.5" /><path d="M3 8h14" /><path d="M7 2v3M13 2v3" />
     </svg>
   ),
+  dialer: (
+    <svg className="sb-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+      <path d="M5.5 3.5h2l1.2 3-1.4 1c.7 1.6 2 2.9 3.6 3.6l1-1.4 3 1.2v2c0 .8-.7 1.5-1.5 1.5-6 0-11-5-11-11 0-.8.7-1.5 1.5-1.5z" />
+      <path d="M13 2.5l4 4M17 2.5l-4 4" />
+    </svg>
+  ),
 };
 
 export function Sidebar() {
@@ -36,6 +43,7 @@ export function Sidebar() {
   const links: { href: string; label: string; icon: React.ReactNode; count?: number; pulse?: boolean }[] = [
     { href: "/", label: "Overview", icon: ICONS.overview },
     { href: "/calls", label: "Voice Calls", icon: ICONS.voice, count: calls.length },
+    { href: "/dialer", label: "Dialer", icon: ICONS.dialer },
     { href: "/leads", label: "Leads", icon: ICONS.leads, count: hot.length, pulse: hot.length > 0 },
     { href: "/site-visits", label: "Site Visits", icon: ICONS.visits },
   ];
@@ -70,6 +78,7 @@ export function Sidebar() {
         <div className="who">Khush</div>
         <div>admin@oltaflock.ai</div>
         <div style={{ marginTop: 10, fontSize: 10, letterSpacing: 0.4 }}>OLTAFLOCK · v1.0</div>
+        <ThemeToggle />
       </div>
     </aside>
   );
