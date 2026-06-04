@@ -32,23 +32,6 @@ interface Batch {
 
 const POLL_MS = 4000;
 
-// Parse pasted leads: one per line, "name, phone, project" (phone required).
-// A line with a single column is treated as a bare phone number.
-function parseLeads(text: string): { lead_name: string | null; lead_phone: string; project: string | null }[] {
-  const out: { lead_name: string | null; lead_phone: string; project: string | null }[] = [];
-  for (const line of text.split(/\r?\n/)) {
-    const t = line.trim();
-    if (!t) continue;
-    const cols = t.split(/[,\t]/).map((c) => c.trim());
-    if (cols.length === 1) {
-      out.push({ lead_name: null, lead_phone: cols[0], project: null });
-    } else {
-      out.push({ lead_name: cols[0] || null, lead_phone: cols[1], project: cols[2] || null });
-    }
-  }
-  return out.filter((r) => /\d/.test(r.lead_phone));
-}
-
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-2)",
   border: "1px solid var(--line)",
@@ -109,11 +92,6 @@ export default function DialerPage() {
   const [singleBusy, setSingleBusy] = useState(false);
   const zeroHold = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zeroLong = useRef(false);
-
-  // bulk
-  const [bulkText, setBulkText] = useState("");
-  const [bulkLabel, setBulkLabel] = useState("");
-  const parsed = useMemo(() => parseLeads(bulkText), [bulkText]);
 
   // active batch + live queue
   const [batch, setBatch] = useState<Batch | null>(null);
@@ -205,25 +183,6 @@ export default function DialerPage() {
     }
   }
 
-  async function startCampaign() {
-    if (!parsed.length || !phoneId) return;
-    const r = await fetch("/api/voice/queue", {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({
-        rows: parsed,
-        label: bulkLabel || `Campaign · ${parsed.length} leads`,
-        agent_phone_number_id: phoneId,
-        concurrency: 1,
-      }),
-    }).then((x) => x.json());
-    if (r?.ok) {
-      setBulkText(""); setBulkLabel("");
-      await refetchBatch(r.batch_id);
-      startLoop(r.batch_id);
-    }
-  }
-
   async function control(action: "pause" | "resume" | "cancel") {
     if (!batch) return;
     await fetch("/api/voice/queue", {
@@ -264,7 +223,7 @@ export default function DialerPage() {
 
   return (
     <>
-      <PageHeader title="Dialer" subtitle="Place a single call or run a bulk calling campaign through the ElevenLabs voice agent" />
+      <PageHeader title="Dialer" subtitle="Place a test call through the ElevenLabs voice agent" />
 
       {/* Voice number selector */}
       <div className="panel" style={{ marginBottom: 18 }}>
@@ -292,9 +251,9 @@ export default function DialerPage() {
         </div>
       </div>
 
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 18, alignItems: "start" }}>
+      <div style={{ display: "flex", justifyContent: "center" }}>
         {/* Single call — keypad */}
-        <div className="panel">
+        <div className="panel" style={{ width: "100%", maxWidth: 460 }}>
           <div className="panel-head"><span className="panel-title">Keypad · test call</span></div>
           <div className="panel-body" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
             <input
@@ -421,26 +380,6 @@ export default function DialerPage() {
               Tap a 10-digit number (auto +91) or hold <strong>0</strong> for <strong>+</strong>. Double-tap ⌫ to clear.
             </div>
             {singleMsg && <div style={{ fontSize: 12, color: "var(--text-2)", textAlign: "center" }}>{singleMsg}</div>}
-          </div>
-        </div>
-
-        {/* Bulk campaign */}
-        <div className="panel">
-          <div className="panel-head"><span className="panel-title">Bulk campaign</span></div>
-          <div className="panel-body" style={{ display: "flex", flexDirection: "column", gap: 12 }}>
-            <input style={inputStyle} placeholder="Campaign name (optional)" value={bulkLabel} onChange={(e) => setBulkLabel(e.target.value)} />
-            <textarea
-              style={{ ...inputStyle, minHeight: 120, fontFamily: "var(--font-geist-mono), monospace", resize: "vertical" }}
-              placeholder={"One lead per line:\nName, +919876543210, Project\n…or just a phone per line"}
-              value={bulkText}
-              onChange={(e) => setBulkText(e.target.value)}
-            />
-            <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
-              <span style={{ fontSize: 12, color: "var(--muted)" }}>{parsed.length} valid {parsed.length === 1 ? "lead" : "leads"}</span>
-              <button style={{ ...btn(true), marginLeft: "auto", opacity: !parsed.length || !phoneId ? 0.5 : 1 }} disabled={!parsed.length || !phoneId} onClick={startCampaign}>
-                Start campaign
-              </button>
-            </div>
           </div>
         </div>
       </div>
