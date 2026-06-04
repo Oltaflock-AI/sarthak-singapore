@@ -202,7 +202,7 @@ function SourceBadge({ source }: { source: string | null | undefined }) {
   let bg = "var(--bg-2)";
   if (s === "whatsapp" || s === "wa") {
     label = "WhatsApp"; color = "#25d366"; bg = "rgba(37, 211, 102, 0.08)";
-  } else if (s === "ringg" || s === "voice" || s === "voice_agent") {
+  } else if (s === "elevenlabs" || s === "ringg" || s === "voice" || s === "voice_agent") {
     label = "Voice Agent"; color = "var(--gold-2)"; bg = "rgba(201,168,90,0.08)";
   } else if (s === "meta" || s === "facebook" || s === "instagram") {
     label = "Meta Ad"; color = "#4f8cff"; bg = "rgba(79, 140, 255, 0.08)";

@@ -135,7 +135,7 @@ export default function CallsPage() {
           ) : filtered.length === 0 ? (
             <EmptyState
               title={calls.length === 0 ? "No calls yet" : "No calls match your filter"}
-              hint={calls.length === 0 ? "Trigger a test call from Ringg.ai to see it appear here." : "Try removing the filter or adjusting your search."}
+              hint={calls.length === 0 ? "Place a test call through the ElevenLabs voice agent to see it appear here." : "Try removing the filter or adjusting your search."}
             />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

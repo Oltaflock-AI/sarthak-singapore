@@ -479,7 +479,7 @@ export default function CallDetailPage() {
               </div>
               <div>
                 <div style={{ fontSize: 13, color: "var(--text)", fontWeight: 500 }}>Call audio</div>
-                <div style={{ fontSize: 11, color: "var(--muted)" }}>{fmtDuration(call.duration_seconds ?? 0)} · Ringg recording</div>
+                <div style={{ fontSize: 11, color: "var(--muted)" }}>{fmtDuration(call.duration_seconds ?? 0)} · Voice agent recording</div>
               </div>
             </div>
             {/* eslint-disable-next-line jsx-a11y/media-has-caption */}

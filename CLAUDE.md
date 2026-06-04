@@ -2,9 +2,11 @@
 
 ## Project Overview
 
-This is the AI Sales Engine for Sarthak Singapore (real estate, Mhow/Indore). It combines a voice agent (Ringg.ai) and a WhatsApp chatbot (Meta Cloud API + GPT-4.1-mini) into a unified dashboard. Built by Oltaflock.
+This is the AI Sales Engine for Sarthak Singapore (real estate, Mhow/Indore). A voice agent (ElevenLabs Conversational AI over a VoBiz SIP trunk) feeds a unified dashboard. Built by Oltaflock.
 
-**Stack**: Next.js (App Router) · Supabase · Ringg.ai · Meta Cloud API · OpenAI GPT-4.1-mini · Vercel
+**Stack**: Next.js (App Router) · Supabase · ElevenLabs Conversational AI · VoBiz SIP trunk · OpenAI GPT-4.1-mini (enrichment) · Vercel
+
+> Voice provider history: Ringg.ai → DialNexa → **ElevenLabs + VoBiz** (current). All prior webhooks removed.
 
 ---
 
@@ -24,12 +26,16 @@ Every task follows three steps in order: lay out exactly what you're going to do
 Lead enquiry (Meta/Google ad)
         │
         ▼
-  Ringg.ai places outbound call
+  ElevenLabs agent places outbound call over VoBiz SIP trunk
         │
-  call completes → webhook → /api/ringg/webhook
+        ├─ conversation ends → ElevenLabs post-call webhook
+        │     → supabase/functions/elevenlabs-webhook  → calls + leads
+        │
+        └─ carrier hangup/CDR → VoBiz callback
+              → supabase/functions/vobiz-webhook       → call_cdr
         │
         ▼
-   Supabase (calls table)
+   Supabase (calls, leads, call_cdr)
         │
         ▼
    Dashboard polls every 10s
@@ -54,8 +60,8 @@ WhatsApp message received
 | File | Purpose |
 |------|---------|
 | `app/page.tsx` | Dashboard (ported from sarthak-dashboard.html) |
-| `app/api/ringg/webhook/route.ts` | Receives Ringg.ai call events |
-| `app/api/whatsapp/webhook/route.ts` | WhatsApp verify + message handler |
+| `supabase/functions/elevenlabs-webhook/index.ts` | ElevenLabs post-call → `calls` + `leads` |
+| `supabase/functions/vobiz-webhook/index.ts` | VoBiz SIP callbacks → `call_cdr` |
 | `lib/supabase.ts` | Supabase server client |
 | `lib/openai.ts` | GPT-4.1-mini client + Priya prompt |
 | `supabase/schema.sql` | Tables: calls, wa_messages |
@@ -65,8 +71,12 @@ WhatsApp message received
 ## Environment Variables
 
 ```env
-RINGG_AI_VOICE_AGENT=           # Ringg.ai assistant/agent UUID
-OPENAI_API_KEY=                 # OpenAI — use gpt-4.1-mini
+ELEVENLABS_API_KEY=             # ElevenLabs API key (outbound calls / SDK)
+ELEVENLABS_AGENT_ID=            # ElevenLabs Conversational AI agent ID
+ELEVENLABS_WEBHOOK_SECRET=      # wsec_… — HMAC secret for post-call webhook (set on edge fn)
+VOBIZ_AUTH_TOKEN=               # VoBiz account auth token — HMAC key for callback verify
+VOBIZ_CALLBACK_URL=             # Exact public vobiz-webhook URL (for signature base, optional)
+OPENAI_API_KEY=                 # OpenAI — use gpt-4.1-mini (deep enrichment)
 SUPABASE_URL=                   # Supabase project URL
 SUPABASE_SERVICE_KEY=           # Supabase service role key (server-side only)
 META_VERIFY_TOKEN=              # Arbitrary string — must match Meta webhook config
@@ -95,12 +105,22 @@ wa_messages (
 
 ---
 
-## Ringg.ai Integration Notes
+## Voice Integration Notes (ElevenLabs + VoBiz)
 
-- No webhook secret — Ringg.ai does not sign webhook payloads
-- Store `RINGG_AI_VOICE_AGENT` (agent UUID) for triggering outbound calls
-- Webhook fires `call_completed` with transcript, score, outcome, duration
-- Deduplicate on `call_id` to avoid double-writes on retries
+**Two layers, two webhooks, no overlap:**
+
+- **ElevenLabs** = conversation layer → `calls` + `leads`. Edge fn `elevenlabs-webhook`.
+  - Signature: `elevenlabs-signature: t=<unix>,v0=<hex>` → `HMAC-SHA256("<t>.<rawBody>", ELEVENLABS_WEBHOOK_SECRET)`, 30-min replay window.
+  - Handles `post_call_transcription` (answered: transcript + analysis + heuristic score) and `call_initiation_failure` (busy/no-answer → missed-lead row, `outcome` = failure reason).
+  - `call_id` = ElevenLabs `conversation_id`. Dedupe via `onConflict: call_id`.
+  - Lead phone: outbound = `metadata.phone_call.external_number`/`to_number`; inbound = `from_number`. Name/project/timeline/budget pulled from `analysis.data_collection_results` (agent-configured) — key names are best-effort.
+- **VoBiz** = telephony layer → `call_cdr` (separate table). Edge fn `vobiz-webhook`.
+  - Signature: `X-Vobiz-Signature-V3` = `base64(HMAC-SHA256(VOBIZ_AUTH_TOKEN, baseURL + "." + nonce))`, nonce in `X-Vobiz-Signature-V3-Nonce`. Signs URL+nonce, NOT body. V2 = same without the `.`.
+  - Events: `Ring` / `StartApp` / `Hangup` / `recording.completed`. Dedupe via `onConflict: call_uuid` (VoBiz `CallUUID`).
+  - Carrier-only data: INR cost, MOS/jitter, ring/answer/hangup timing, SIP hangup cause. Rich fields backfillable from VoBiz CDR REST API (`X-Auth-ID`/`X-Auth-Token`).
+  - Join to `calls` on phone + time when a unified view is needed.
+
+**SIP wiring** (no code): import VoBiz number in ElevenLabs (Import from SIP Trunk, transport TCP, `<domain>.sip.vobiz.ai`). Inbound: point VoBiz trunk at `sip.rtc.elevenlabs.io:5060` (TCP), attach number to agent.
 
 ## WhatsApp / Meta Notes
 
