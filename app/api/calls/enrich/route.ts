@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { openai } from "@/lib/openai";
+import { getCalBookingOutcome } from "@/lib/elevenlabs";
 
 const ENRICH_PROMPT = `You are a senior real-estate sales analyst. Read this Sarthak Singapore voice-call transcript between an AI sales agent and a prospective buyer and produce a DEEP, evidence-based analysis. Quote or paraphrase actual transcript moments as evidence — never invent.
 
@@ -152,6 +153,15 @@ export async function POST(req: NextRequest) {
       .single();
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
 
+    // Authoritative booking outcome from the actual cal.com tool result (not GPT's
+    // transcript guess, which marks failed attempts as "booked"). null = couldn't
+    // reach the ElevenLabs API → fall back to the transcript-derived flag.
+    const calBooking = call.call_id
+      ? await getCalBookingOutcome(String(call.call_id))
+      : null;
+    const authoritative = calBooking != null && calBooking.attempted;
+    const isBooked = authoritative ? calBooking!.booked : !!parsed.site_visit_booked;
+
     // Also upsert into leads CRM table so it shows up on /leads.
     // Canonicalize to +E.164 so this matches the webhook's key and never forks
     // into a second (unprefixed) lead row. Collapse any legacy unprefixed row.
@@ -174,7 +184,7 @@ export async function POST(req: NextRequest) {
       }
 
       let status = existingLead?.status ?? "new";
-      if (parsed.site_visit_booked) status = "booked";
+      if (isBooked) status = "booked";
       else if (parsed.buyer_type || parsed.timeline || parsed.budget) status = "qualified";
 
       await supabase.from("leads").upsert({
@@ -191,31 +201,36 @@ export async function POST(req: NextRequest) {
         status,
       }, { onConflict: "phone" });
 
-      // Mirror booked visits into site_visits so they surface on /site-visits.
-      // Reliable signal: the LLM-derived site_visit_booked (data_collection_results
-      // is empty — the agent has no analysis fields configured). Idempotent on call_id.
-      if (parsed.site_visit_booked) {
-        const whenIso = parsed.site_visit_datetime
-          ? (Number.isFinite(Date.parse(parsed.site_visit_datetime))
-              ? new Date(parsed.site_visit_datetime).toISOString()
-              : null)
+      // Mirror genuine bookings into site_visits (shown on /site-visits). Driven by
+      // the authoritative cal.com tool result when available — so failed attempts
+      // (e.g. slot unavailable) never create a row, and the time is cal.com's real
+      // booked start, not GPT's guess. Idempotent on call_id.
+      const callKey = String(call.call_id ?? call.id);
+      if (isBooked) {
+        // Prefer cal.com's actual start; fall back to the model's extracted datetime.
+        const startSrc = calBooking?.startUtc ?? parsed.site_visit_datetime ?? null;
+        const whenIso = startSrc && Number.isFinite(Date.parse(startSrc))
+          ? new Date(startSrc).toISOString()
           : null;
         const visitRow: Record<string, unknown> = {
-          call_id: call.call_id ?? call.id,
+          call_id: callKey,
           lead_phone: phone,
           status: "pending",
-          notes: parsed.outcome ?? "Booked via voice agent",
+          notes: calBooking?.uid
+            ? `Booked via cal.com · ${calBooking.uid}`
+            : (parsed.outcome ?? "Booked via voice agent"),
         };
         if (parsed.lead_name ?? existingLead?.name) visitRow.lead_name = parsed.lead_name ?? existingLead?.name;
         if (parsed.project ?? existingLead?.project) visitRow.project = parsed.project ?? existingLead?.project;
         if (whenIso) visitRow.scheduled_for = whenIso;
-        if (parsed.site_visit_datetime || parsed.outcome) {
-          visitRow.scheduled_for_text = parsed.site_visit_datetime ?? parsed.outcome;
-        }
+        if (startSrc) visitRow.scheduled_for_text = startSrc;
         const { error: visitErr } = await supabase
           .from("site_visits")
           .upsert(visitRow, { onConflict: "call_id" });
         if (visitErr) console.error("[enrich] site_visits upsert error", visitErr, visitRow);
+      } else if (authoritative) {
+        // cal.com was attempted but did NOT book → remove any stale/false-positive row.
+        await supabase.from("site_visits").delete().eq("call_id", callKey);
       }
     }
 

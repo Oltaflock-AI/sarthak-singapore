@@ -54,6 +54,60 @@ export function normalisePhone(raw: string): string {
   return "+" + digits;
 }
 
+export interface CalBookingOutcome {
+  attempted: boolean;   // the calcom_create_booking tool was invoked
+  booked: boolean;      // it returned success with a real booking uid
+  uid: string | null;
+  startUtc: string | null;  // Cal.com's actual booked start (ISO 8601)
+  error: string | null;
+}
+
+// Authoritative booking truth: inspect a conversation's calcom_create_booking
+// tool result. Returns null if the conversation can't be fetched (caller falls
+// back to the transcript-derived guess).
+export async function getCalBookingOutcome(
+  conversationId: string,
+): Promise<CalBookingOutcome | null> {
+  let res: Response;
+  try {
+    res = await fetch(`${API_BASE}/conversations/${encodeURIComponent(conversationId)}`, {
+      headers: { "xi-api-key": apiKey() },
+      cache: "no-store",
+    });
+  } catch {
+    return null;
+  }
+  if (!res.ok) return null;
+  const data = await res.json().catch(() => null);
+  if (!data || !Array.isArray(data.transcript)) return null;
+
+  const out: CalBookingOutcome = { attempted: false, booked: false, uid: null, startUtc: null, error: null };
+  for (const turn of data.transcript) {
+    for (const r of turn?.tool_results ?? []) {
+      const name = String(r?.tool_name ?? "").toLowerCase();
+      if (!name.includes("cal") || !name.includes("book")) continue;
+      out.attempted = true;
+      if (r?.is_error) {
+        out.error = typeof r?.result_value === "string" ? r.result_value.slice(0, 300) : "booking failed";
+        continue;
+      }
+      try {
+        const parsed = typeof r?.result_value === "string" ? JSON.parse(r.result_value) : r?.result_value;
+        const d = parsed?.data ?? {};
+        if (d?.uid) {
+          out.booked = true;
+          out.uid = String(d.uid);
+          out.startUtc = d?.start ? String(d.start) : null;
+          out.error = null;
+        }
+      } catch {
+        /* leave as not-booked */
+      }
+    }
+  }
+  return out;
+}
+
 export async function placeOutboundCall(opts: {
   agentPhoneNumberId: string;
   toNumber: string;
