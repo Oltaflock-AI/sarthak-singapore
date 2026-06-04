@@ -21,11 +21,6 @@ const ICONS = {
       <rect x="2.5" y="3.5" width="4" height="13" rx="1" /><rect x="8" y="3.5" width="4" height="9" rx="1" /><rect x="13.5" y="3.5" width="4" height="6" rx="1" />
     </svg>
   ),
-  projects: (
-    <svg className="sb-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
-      <path d="M3 17V8l7-5 7 5v9" /><path d="M8 17v-5h4v5" />
-    </svg>
-  ),
   visits: (
     <svg className="sb-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
       <rect x="3" y="4" width="14" height="13" rx="1.5" /><path d="M3 8h14" /><path d="M7 2v3M13 2v3" />
@@ -43,7 +38,6 @@ export function Sidebar() {
     { href: "/calls", label: "Voice Calls", icon: ICONS.voice, count: calls.length },
     { href: "/leads", label: "Leads", icon: ICONS.leads, count: hot.length, pulse: hot.length > 0 },
     { href: "/site-visits", label: "Site Visits", icon: ICONS.visits },
-    { href: "/projects", label: "Projects · KB", icon: ICONS.projects },
   ];
 
   return (
