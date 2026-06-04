@@ -1,13 +1,29 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient } from "@supabase/supabase-js";
+import { createClient, type SupabaseClient } from "@supabase/supabase-js";
 import { DASHBOARD_SINCE } from "./config";
 
-export const supabase = createClient(
-  process.env.NEXT_PUBLIC_SUPABASE_URL!,
-  process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY!
-);
+// Anon client (client-side live polling). Created lazily so importing this
+// module never throws when the NEXT_PUBLIC_* vars are empty at build time
+// (e.g. /_not-found prerender); it is only instantiated on first real use.
+let _anon: SupabaseClient | null = null;
+function getAnon(): SupabaseClient {
+  if (!_anon) {
+    _anon = createClient(
+      process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
+      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""
+    );
+  }
+  return _anon;
+}
+export const supabase = new Proxy({} as SupabaseClient, {
+  get(_t, prop) {
+    const c = getAnon();
+    const v = c[prop as keyof SupabaseClient];
+    return typeof v === "function" ? v.bind(c) : v;
+  },
+});
 
 export interface CallRow {
   id: string;
