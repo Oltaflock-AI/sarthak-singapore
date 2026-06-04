@@ -1,15 +1,14 @@
 # Sarthak Singapore — AI Sales Engine
 
 AI sales engine for **Sarthak Singapore** (real estate, Mhow/Indore). A voice agent
-(ElevenLabs Conversational AI over a VoBiz SIP trunk) and a WhatsApp assistant feed a
-unified Next.js dashboard. Built by [Oltaflock](https://oltaflock.ai).
+(ElevenLabs Conversational AI over a VoBiz SIP trunk) feeds a unified Next.js
+dashboard. Built by [Oltaflock](https://oltaflock.ai).
 
 ## Stack
 
 - **Frontend / API**: Next.js (App Router), deployed on Vercel
 - **Database**: Supabase (Postgres + Edge Functions)
 - **Voice**: ElevenLabs Conversational AI + VoBiz SIP trunk
-- **Messaging**: WhatsApp via Meta Graph API
 - **Enrichment**: OpenAI GPT-4.1-mini
 
 > Voice provider history: Ringg.ai → DialNexa → **ElevenLabs + VoBiz** (current).
@@ -33,19 +32,6 @@ Lead enquiry (Meta / Google ad)
         │
         ▼
    Dashboard polls every 10s
-
-
-WhatsApp message received
-        │
-        ▼
-  /api/whatsapp/webhook
-        │
-  GPT-4.1-mini generates reply (Priya persona, Hindi/English)
-        │
-  Meta Graph API sends reply
-        │
-        ▼
-  Supabase (wa_messages table)
 ```
 
 ### Two voice layers, two webhooks, no overlap
@@ -77,7 +63,7 @@ placed through the ElevenLabs SIP trunk. Bulk calling will arrive via Zoho CRM.
 | `supabase/functions/elevenlabs-webhook/index.ts` | Post-call → `calls` + `leads` |
 | `supabase/functions/vobiz-webhook/index.ts` | SIP callbacks → `call_cdr` |
 | `lib/supabase.ts` | Supabase server client |
-| `lib/openai.ts` | GPT-4.1-mini client + Priya prompt |
+| `lib/openai.ts` | GPT-4.1-mini client (lead enrichment) |
 | `supabase/schema.sql` | Table definitions |
 
 ## Environment Variables
@@ -91,17 +77,14 @@ VOBIZ_CALLBACK_URL=          # Public vobiz-webhook URL (signature base, optiona
 OPENAI_API_KEY=              # OpenAI — gpt-4.1-mini (enrichment)
 SUPABASE_URL=                # Supabase project URL
 SUPABASE_SERVICE_KEY=        # Service role key (server-side only)
-META_VERIFY_TOKEN=           # Must match Meta webhook config
-META_PHONE_NUMBER_ID=        # Meta Developer → WhatsApp → API Setup
-META_ACCESS_TOKEN=           # Permanent System User token
 ```
 
-## AI Persona
+## Voice Agent Persona
 
-The WhatsApp bot responds as **Priya**, Sarthak Singapore's AI sales assistant. She
-speaks Hindi by default (switches to English to match the user), qualifies leads
-(end-use vs investment, NRI vs local, budget, timeline), books site visits, sends
-brochure links, and never makes up pricing — exact rates defer to the sales team.
+The ElevenLabs voice agent speaks as Sarthak Singapore's AI sales assistant. It
+speaks Hindi by default (switches to English to match the caller), qualifies leads
+(end-use vs investment, NRI vs local, budget, timeline), books site visits, and
+never makes up pricing — exact rates defer to the sales team.
 
 ## Getting Started
 

@@ -39,18 +39,6 @@ Lead enquiry (Meta/Google ad)
         │
         ▼
    Dashboard polls every 10s
-
-WhatsApp message received
-        │
-        ▼
-  /api/whatsapp/webhook
-        │
-  GPT-4.1-mini generates reply (Priya persona, Hindi/English)
-        │
-  Meta Graph API sends reply
-        │
-        ▼
-  Supabase (wa_messages table)
 ```
 
 ---
@@ -63,8 +51,8 @@ WhatsApp message received
 | `supabase/functions/elevenlabs-webhook/index.ts` | ElevenLabs post-call → `calls` + `leads` |
 | `supabase/functions/vobiz-webhook/index.ts` | VoBiz SIP callbacks → `call_cdr` |
 | `lib/supabase.ts` | Supabase server client |
-| `lib/openai.ts` | GPT-4.1-mini client + Priya prompt |
-| `supabase/schema.sql` | Tables: calls, wa_messages |
+| `lib/openai.ts` | GPT-4.1-mini client (lead enrichment) |
+| `supabase/schema.sql` | Tables: calls, leads, call_cdr |
 
 ---
 
@@ -79,9 +67,6 @@ VOBIZ_CALLBACK_URL=             # Exact public vobiz-webhook URL (for signature 
 OPENAI_API_KEY=                 # OpenAI — use gpt-4.1-mini (deep enrichment)
 SUPABASE_URL=                   # Supabase project URL
 SUPABASE_SERVICE_KEY=           # Supabase service role key (server-side only)
-META_VERIFY_TOKEN=              # Arbitrary string — must match Meta webhook config
-META_PHONE_NUMBER_ID=           # From Meta Developer → WhatsApp → API Setup
-META_ACCESS_TOKEN=              # Permanent System User token (never expires)
 ```
 
 ---
@@ -89,17 +74,11 @@ META_ACCESS_TOKEN=              # Permanent System User token (never expires)
 ## Supabase Tables
 
 ```sql
--- calls: one row per Ringg.ai call
+-- calls: one row per voice call
 calls (
   id, lead_name, lead_phone, project, source,
   lead_score, score_label, duration_seconds,
   outcome, transcript (jsonb), created_at
-)
-
--- wa_messages: one row per WhatsApp conversation turn
-wa_messages (
-  id, from_number, name, text_in,
-  text_out, wa_id, created_at
 )
 ```
 
@@ -122,18 +101,10 @@ wa_messages (
 
 **SIP wiring** (no code): import VoBiz number in ElevenLabs (Import from SIP Trunk, transport TCP, `<domain>.sip.vobiz.ai`). Inbound: point VoBiz trunk at `sip.rtc.elevenlabs.io:5060` (TCP), attach number to agent.
 
-## WhatsApp / Meta Notes
+## Voice Agent Persona
 
-- Webhook verification: `GET /api/whatsapp/webhook` — match `hub.verify_token` against `META_VERIFY_TOKEN`
-- Incoming messages: `POST /api/whatsapp/webhook` — always return 200 immediately, process async
-- Send replies via `POST https://graph.facebook.com/v21.0/{META_PHONE_NUMBER_ID}/messages`
-- WhatsApp Business Account ID: `2261117857719079` (for template management if needed later)
-- Test phone number: `+1 814 404 5578` (Meta sandbox number)
-
-## AI Persona
-
-The WhatsApp bot responds as **Priya**, Sarthak Singapore's AI sales assistant. She:
-- Speaks Hindi by default, switches to English if the user does
+The ElevenLabs voice agent is Sarthak Singapore's AI sales assistant. It:
+- Speaks Hindi by default, switches to English if the caller does
 - Qualifies leads: end-use vs investment, NRI vs local, budget, timeline
-- Books site visits, sends brochure links, warm-transfers hot leads
+- Books site visits, warm-transfers hot leads
 - Never makes up pricing — defers to the sales team for exact rates
