@@ -264,6 +264,13 @@ export default function CallDetailPage() {
   }, [params.id]);
 
   const analysis = (call?.analysis ?? {}) as AnalysisBlob;
+  // Prefer a stored recording URL; otherwise stream ElevenLabs audio on demand
+  // via our proxy route (audio isn't in the post-call webhook).
+  const recordingUrl =
+    analysis.recording_url ??
+    (call?.source === "elevenlabs" && call?.call_id
+      ? `/api/recording?conversation_id=${encodeURIComponent(call.call_id)}`
+      : null);
   const regexSentiment = useMemo(() => computeSentiment(call?.transcript ?? null), [call?.transcript]);
 
   // Prefer the LLM sentiment from enrichment; fall back to the regex heuristic.
@@ -462,7 +469,7 @@ export default function CallDetailPage() {
       </Section>
 
       {/* ── Recording ─────────────────────────────────────── */}
-      {analysis.recording_url && (
+      {recordingUrl && (
         <Section title="Recording">
           <div className="panel" style={{
             padding: "18px 20px",
@@ -483,7 +490,7 @@ export default function CallDetailPage() {
               </div>
             </div>
             {/* eslint-disable-next-line jsx-a11y/media-has-caption */}
-            <audio controls src={analysis.recording_url} style={{ width: "100%" }} />
+            <audio controls src={recordingUrl} style={{ width: "100%" }} />
           </div>
         </Section>
       )}

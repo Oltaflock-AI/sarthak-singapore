@@ -20,6 +20,8 @@ const supabase = createClient(
 
 const VOBIZ_AUTH_TOKEN = Deno.env.get("VOBIZ_AUTH_TOKEN") ?? "";
 const VOBIZ_CALLBACK_URL = Deno.env.get("VOBIZ_CALLBACK_URL") ?? "";
+// When "1", log signature diagnostics and ACCEPT despite mismatch (debug only).
+const VOBIZ_DEBUG = (Deno.env.get("VOBIZ_DEBUG") ?? "") === "1";
 
 async function hmacBase64(secret: string, message: string): Promise<string> {
   const key = await crypto.subtle.importKey(
@@ -56,15 +58,43 @@ async function verifySignature(req: Request): Promise<boolean> {
 
   const v3 = req.headers.get("x-vobiz-signature-v3") ?? "";
   const v3Nonce = req.headers.get("x-vobiz-signature-v3-nonce") ?? "";
+  const v2 = req.headers.get("x-vobiz-signature-v2") ?? "";
+  const v2Nonce = req.headers.get("x-vobiz-signature-v2-nonce") ?? "";
+
   if (v3 && v3Nonce) {
     const expected = await hmacBase64(VOBIZ_AUTH_TOKEN, `${base}.${v3Nonce}`);
     if (constantTimeEqual(v3, expected)) return true;
   }
-  const v2 = req.headers.get("x-vobiz-signature-v2") ?? "";
-  const v2Nonce = req.headers.get("x-vobiz-signature-v2-nonce") ?? "";
   if (v2 && v2Nonce) {
     const expected = await hmacBase64(VOBIZ_AUTH_TOKEN, `${base}${v2Nonce}`);
     if (constantTimeEqual(v2, expected)) return true;
+  }
+
+  if (VOBIZ_DEBUG) {
+    // Diagnostics: try several base-URL candidates to find which one VoBiz signs.
+    const candidates = [
+      base,
+      baseUrlOf(req.url),
+      req.url,
+      VOBIZ_CALLBACK_URL,
+      VOBIZ_CALLBACK_URL.replace(/^https:/, "http:"),
+    ];
+    const tries: Record<string, unknown> = {};
+    for (const c of candidates) {
+      tries[c] = {
+        v3: v3Nonce ? await hmacBase64(VOBIZ_AUTH_TOKEN, `${c}.${v3Nonce}`) : null,
+        v2: v2Nonce ? await hmacBase64(VOBIZ_AUTH_TOKEN, `${c}${v2Nonce}`) : null,
+      };
+    }
+    console.log("[vobiz-webhook] SIGDEBUG", JSON.stringify({
+      url_seen: req.url,
+      base_used: base,
+      recv_v3: v3, v3_nonce: v3Nonce,
+      recv_v2: v2, v2_nonce: v2Nonce,
+      all_headers: Object.fromEntries(req.headers.entries()),
+      expected_by_base: tries,
+    }));
+    return true; // accept in debug so we can capture the row + compare offline
   }
   return false;
 }
@@ -143,7 +173,7 @@ Deno.serve(async (req) => {
   set("from_number", pick(body, ["From", "from_number", "caller_id_number"]));
   set("to_number", pick(body, ["To", "to_number", "destination_number"]));
   set("status", pick(body, ["Status", "status"]));
-  set("duration_seconds", toInt(pick(body, ["Duration", "duration"])));
+  set("duration_seconds", toInt(pick(body, ["Duration", "duration", "transcription_duration_sec"])));
   set("billsec", toInt(pick(body, ["billsec", "BillSec"])));
   set("ring_time", toInt(pick(body, ["ring_time", "RingTime"])));
   set("start_time", pick(body, ["StartTime", "start_time"]));
@@ -157,7 +187,7 @@ Deno.serve(async (req) => {
   set("mos", toNum(pick(body, ["mos", "MOS"])));
   set("jitter", toNum(pick(body, ["jitter"])));
   set("packet_loss", toNum(pick(body, ["packet_loss"])));
-  set("sip_call_id", pick(body, ["sip_call_id", "SipCallID"]));
+  set("sip_call_id", pick(body, ["sip_call_id", "SipCallID", "transcription_id"]));
   set("recording_url", pick(body, ["RecordingUrl", "recording_url", "recording"]));
 
   const { error } = await supabase.from("call_cdr").upsert(row, { onConflict: "call_uuid" });
