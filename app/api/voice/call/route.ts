@@ -43,8 +43,9 @@ export async function POST(req: NextRequest) {
     .single();
   if (qErr) return NextResponse.json({ error: qErr.message }, { status: 500 });
 
-  // Dial right now.
-  const dyn: Record<string, string> = {};
+  // Dial right now. The agent's first message requires {{callee_name}} —
+  // omitting it fails the call instantly, so always send it (with a fallback).
+  const dyn: Record<string, string> = { callee_name: leadName || "ग्राहक" };
   if (leadName) dyn.lead_name = leadName;
   if (project) dyn.project = project;
 

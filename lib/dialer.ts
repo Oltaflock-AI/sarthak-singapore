@@ -112,6 +112,8 @@ async function dialNext(
     }
     if (next.lead_name) dyn.lead_name = next.lead_name;
     if (next.project) dyn.project = next.project;
+    // Agent's first message requires {{callee_name}} — always send it.
+    if (!dyn.callee_name) dyn.callee_name = next.lead_name || "ग्राहक";
 
     try {
       const r = await placeOutboundCall({
