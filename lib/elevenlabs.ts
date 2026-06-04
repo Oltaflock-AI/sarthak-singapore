@@ -108,6 +108,71 @@ export async function getCalBookingOutcome(
   return out;
 }
 
+// ── Live call status ────────────────────────────────────────────────────────
+// Poll a conversation to drive the dialer's live indicator. ElevenLabs status
+// flow for an outbound SIP call:
+//   initiated   → call placed, ringing (no answer yet)
+//   in-progress → callee picked up; metadata.accepted_time_unix_secs is set
+//   processing  → call ended, post-call analysis running
+//   done        → finished
+//   failed      → busy / no-answer / error
+export type CallPhase = "ringing" | "connected" | "ended" | "failed" | "unknown";
+
+export interface LiveCallStatus {
+  conversation_id: string;
+  status: string; // raw ElevenLabs status
+  phase: CallPhase; // collapsed, UI-friendly
+  accepted: boolean; // callee has answered
+  start_unix: number | null;
+  accepted_unix: number | null; // when the callee picked up
+  duration_secs: number | null; // final duration once ended
+  termination_reason: string | null;
+}
+
+function phaseFor(status: string, accepted: boolean): CallPhase {
+  switch (status) {
+    case "initiated":
+      return accepted ? "connected" : "ringing";
+    case "in-progress":
+      return "connected";
+    case "processing":
+    case "done":
+      return "ended";
+    case "failed":
+      return "failed";
+    default:
+      return "unknown";
+  }
+}
+
+export async function getLiveCallStatus(
+  conversationId: string,
+): Promise<LiveCallStatus> {
+  const res = await fetch(`${API_BASE}/conversations/${conversationId}`, {
+    headers: { "xi-api-key": apiKey() },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`conversation ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const d = await res.json();
+  const m = d?.metadata ?? {};
+  const status: string = d?.status ?? "unknown";
+  const accepted_unix: number | null = m?.accepted_time_unix_secs ?? null;
+  const accepted = accepted_unix != null || status === "in-progress";
+  return {
+    conversation_id: conversationId,
+    status,
+    phase: phaseFor(status, accepted),
+    accepted,
+    start_unix: m?.start_time_unix_secs ?? null,
+    accepted_unix,
+    duration_secs: m?.call_duration_secs ?? null,
+    termination_reason: m?.termination_reason ?? null,
+  };
+}
+
 export async function placeOutboundCall(opts: {
   agentPhoneNumberId: string;
   toNumber: string;

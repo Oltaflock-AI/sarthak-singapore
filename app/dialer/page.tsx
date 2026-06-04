@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
+import type { LiveCallStatus, CallPhase } from "@/lib/elevenlabs";
 
 interface PhoneNumber {
   id: string;
@@ -30,7 +31,14 @@ interface Batch {
   concurrency: number;
 }
 
+interface ActiveCall {
+  conversationId: string;
+  name: string;
+  phone: string;
+}
+
 const POLL_MS = 4000;
+const LIVE_POLL_MS = 2000;
 
 const inputStyle: React.CSSProperties = {
   background: "var(--bg-2)",
@@ -44,12 +52,12 @@ const inputStyle: React.CSSProperties = {
 };
 
 function StatusBadge({ status }: { status: string }) {
-  const map: Record<string, { cls: string; bg: string; color: string }> = {
-    queued: { cls: "", bg: "var(--panel-2)", color: "var(--muted)" },
-    dialing: { cls: "", bg: "var(--gold-soft-2)", color: "var(--gold-2)" },
-    completed: { cls: "", bg: "var(--hot-soft)", color: "var(--hot)" },
-    failed: { cls: "", bg: "var(--danger-soft)", color: "var(--danger)" },
-    canceled: { cls: "", bg: "var(--panel-2)", color: "var(--dim)" },
+  const map: Record<string, { bg: string; color: string }> = {
+    queued: { bg: "var(--panel-2)", color: "var(--muted)" },
+    dialing: { bg: "var(--gold-soft-2)", color: "var(--gold-2)" },
+    completed: { bg: "var(--hot-soft)", color: "var(--hot)" },
+    failed: { bg: "var(--danger-soft)", color: "var(--danger)" },
+    canceled: { bg: "var(--panel-2)", color: "var(--dim)" },
   };
   const s = map[status] ?? map.queued;
   return (
@@ -80,10 +88,139 @@ const btn = (primary = false): React.CSSProperties => ({
   transition: "all 0.15s",
 });
 
+function mmss(secs: number): string {
+  const s = Math.max(0, Math.floor(secs));
+  const m = Math.floor(s / 60);
+  return `${m}:${(s % 60).toString().padStart(2, "0")}`;
+}
+
+// Visual treatment per live-call phase.
+const PHASE_META: Record<CallPhase, { label: string; color: string; soft: string }> = {
+  ringing: { label: "Ringing…", color: "var(--gold)", soft: "var(--gold-soft-2)" },
+  connected: { label: "Connected", color: "var(--hot)", soft: "var(--hot-soft)" },
+  ended: { label: "Call ended", color: "var(--muted)", soft: "var(--panel-2)" },
+  failed: { label: "Not connected", color: "var(--danger)", soft: "var(--danger-soft)" },
+  unknown: { label: "Connecting…", color: "var(--gold)", soft: "var(--gold-soft-2)" },
+};
+
+const PHONE_ICON = (
+  <svg width="26" height="26" viewBox="0 0 20 20" fill="currentColor">
+    <path d="M5.5 3.5h2l1.2 3-1.4 1c.7 1.6 2 2.9 3.6 3.6l1-1.4 3 1.2v2c0 .8-.7 1.5-1.5 1.5-6 0-11-5-11-11 0-.8.7-1.5 1.5-1.5z" />
+  </svg>
+);
+
+// ── Live call card ────────────────────────────────────────────────────────
+// Polls /api/voice/status while a call is in flight and renders the
+// Ringing → Connected → Ended progression with a live timer.
+function LiveCallCard({ call, onDismiss }: { call: ActiveCall; onDismiss: () => void }) {
+  const [live, setLive] = useState<LiveCallStatus | null>(null);
+  const [, setTick] = useState(0); // 1s heartbeat for the running timer
+  const poll = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // reset when a new call starts
+  useEffect(() => { setLive(null); }, [call.conversationId]);
+
+  useEffect(() => {
+    let alive = true;
+    const fetchStatus = async () => {
+      try {
+        const r = await fetch(`/api/voice/status?conversation_id=${call.conversationId}`, { cache: "no-store" });
+        const d = (await r.json()) as LiveCallStatus;
+        if (!alive) return;
+        setLive(d);
+        if (d.phase === "ended" || d.phase === "failed") {
+          if (poll.current) clearInterval(poll.current);
+          poll.current = null;
+        }
+      } catch { /* transient — keep polling */ }
+    };
+    fetchStatus();
+    poll.current = setInterval(fetchStatus, LIVE_POLL_MS);
+    return () => { alive = false; if (poll.current) clearInterval(poll.current); };
+  }, [call.conversationId]);
+
+  // 1s heartbeat so the connected timer ticks
+  useEffect(() => {
+    const id = setInterval(() => setTick((t) => t + 1), 1000);
+    return () => clearInterval(id);
+  }, []);
+
+  const phase: CallPhase = live?.phase ?? "unknown";
+  const meta = PHASE_META[phase];
+  const done = phase === "ended" || phase === "failed";
+
+  // elapsed: prefer final duration once ended; else count from accept (or start)
+  let elapsed = 0;
+  if (live?.duration_secs != null && done) {
+    elapsed = live.duration_secs;
+  } else if (live?.accepted_unix) {
+    elapsed = Date.now() / 1000 - live.accepted_unix;
+  } else if (live?.start_unix && phase === "connected") {
+    elapsed = Date.now() / 1000 - live.start_unix;
+  }
+  const showTimer = phase === "connected" || (done && (live?.duration_secs ?? 0) > 0);
+
+  return (
+    <div
+      className="panel"
+      style={{ marginBottom: 18, borderColor: meta.color, boxShadow: `0 0 0 1px ${meta.color}, var(--shadow-2)`, overflow: "hidden" }}
+    >
+      <div style={{ display: "flex", alignItems: "center", gap: 18, padding: "20px 22px", background: `linear-gradient(90deg, ${meta.soft} 0%, transparent 70%)` }}>
+        {/* pulsing orb */}
+        <div className="call-orb" style={{ width: 56, height: 56, color: meta.color, flexShrink: 0 }}>
+          {!done && <span className="ring" />}
+          {!done && <span className="ring b" />}
+          <span style={{ width: 56, height: 56, borderRadius: "50%", display: "grid", placeItems: "center", background: meta.color, color: "#0a0908", boxShadow: `0 6px 18px -4px ${meta.color}` }}>
+            {PHONE_ICON}
+          </span>
+        </div>
+
+        {/* identity */}
+        <div style={{ minWidth: 0, flex: 1 }}>
+          <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+            <span style={{ fontSize: 17, fontWeight: 600, color: "var(--text)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+              {call.name || "Unknown lead"}
+            </span>
+            {phase === "connected" && (
+              <span className="eq" style={{ color: meta.color }}><i /><i /><i /><i /></span>
+            )}
+          </div>
+          <div className="num" style={{ fontSize: 13, color: "var(--text-2)", marginTop: 3 }}>{call.phone}</div>
+        </div>
+
+        {/* status + timer */}
+        <div style={{ textAlign: "right", flexShrink: 0 }}>
+          <div style={{ display: "inline-flex", alignItems: "center", gap: 7, fontSize: 12, fontWeight: 700, letterSpacing: 0.5, textTransform: "uppercase", color: meta.color }}>
+            {!done && <span style={{ width: 7, height: 7, borderRadius: 7, background: meta.color, animation: "pulse 1.1s ease-in-out infinite" }} />}
+            {meta.label}
+          </div>
+          <div className="num" style={{ fontSize: 26, fontWeight: 600, letterSpacing: -0.5, marginTop: 4, color: "var(--text)", fontVariantNumeric: "tabular-nums" }}>
+            {showTimer ? mmss(elapsed) : phase === "ringing" ? "··· " : "—"}
+          </div>
+          {done && (
+            <button onClick={onDismiss} style={{ ...btn(), marginTop: 8, padding: "5px 12px", fontSize: 11.5 }}>
+              {phase === "failed" ? "Dismiss" : "Done"}
+            </button>
+          )}
+        </div>
+      </div>
+
+      {done && (live?.termination_reason || phase === "failed") && (
+        <div style={{ padding: "9px 22px", borderTop: "1px solid var(--line)", fontSize: 11.5, color: "var(--muted)" }}>
+          {live?.termination_reason
+            ? `Ended — ${live.termination_reason.replace(/_/g, " ")}`
+            : "The call did not connect (busy, no answer, or rejected)."}
+        </div>
+      )}
+    </div>
+  );
+}
+
 export default function DialerPage() {
   const [numbers, setNumbers] = useState<PhoneNumber[]>([]);
   const [numErr, setNumErr] = useState<string | null>(null);
   const [phoneId, setPhoneId] = useState<string>("");
+  const [pickerOpen, setPickerOpen] = useState(false);
 
   // single call (keypad)
   const [sName, setSName] = useState("");
@@ -92,6 +229,9 @@ export default function DialerPage() {
   const [singleBusy, setSingleBusy] = useState(false);
   const zeroHold = useRef<ReturnType<typeof setTimeout> | null>(null);
   const zeroLong = useRef(false);
+
+  // live call indicator
+  const [activeCall, setActiveCall] = useState<ActiveCall | null>(null);
 
   // active batch + live queue
   const [batch, setBatch] = useState<Batch | null>(null);
@@ -118,6 +258,8 @@ export default function DialerPage() {
   useEffect(() => {
     if (phoneId) localStorage.setItem("dialer_phone_id", phoneId);
   }, [phoneId]);
+
+  const selected = useMemo(() => numbers.find((n) => n.id === phoneId) ?? null, [numbers, phoneId]);
 
   // ── live queue polling + dialer loop for the active batch ──────────────────
   const refetchBatch = useCallback(async (id: string) => {
@@ -168,7 +310,12 @@ export default function DialerPage() {
         }),
       }).then((x) => x.json());
       if (r?.ok) {
-        setSingleMsg(`Calling ${sName || sPhone}… (conversation ${r.conversation_id ?? "—"})`);
+        const name = sName.trim();
+        const phone = sPhone.trim();
+        if (r.conversation_id) {
+          setActiveCall({ conversationId: r.conversation_id, name, phone });
+        }
+        setSingleMsg(null);
         setSName(""); setSPhone("");
         await refetchBatch(r.batch_id);
         setBatch((b) => b ?? { id: r.batch_id, label: "Single", status: "running", concurrency: 1 });
@@ -220,51 +367,97 @@ export default function DialerPage() {
 
   const running = batch?.status === "running";
   const paused = batch?.status === "paused";
+  const callDisabled = !sPhone.trim() || !phoneId || singleBusy;
 
   return (
     <>
-      <PageHeader title="Dialer" subtitle="Place a test call through the ElevenLabs voice agent" />
+      <PageHeader title="Dialer" subtitle="Place a call through the ElevenLabs voice agent" />
 
-      {/* Voice number selector */}
+      {/* ── Voice line card ─────────────────────────────────────────────── */}
       <div className="panel" style={{ marginBottom: 18 }}>
-        <div className="panel-body" style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
-          <label style={{ fontSize: 12, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.6, fontWeight: 600 }}>
-            Voice number
-          </label>
-          {numbers.length > 0 ? (
-            <select value={phoneId} onChange={(e) => setPhoneId(e.target.value)} style={{ ...inputStyle, width: "auto", minWidth: 280 }}>
-              {numbers.map((n) => (
-                <option key={n.id} value={n.id}>
-                  {n.phone_number} {n.label ? `· ${n.label}` : ""} {n.provider ? `(${n.provider})` : ""}
-                </option>
-              ))}
-            </select>
-          ) : (
-            <input
-              placeholder="agent_phone_number_id (paste manually)"
-              value={phoneId}
-              onChange={(e) => setPhoneId(e.target.value)}
-              style={{ ...inputStyle, width: "auto", minWidth: 320 }}
-            />
+        <div className="panel-body" style={{ display: "flex", alignItems: "center", gap: 16, flexWrap: "wrap" }}>
+          <div style={{ width: 40, height: 40, borderRadius: 10, display: "grid", placeItems: "center", background: "var(--gold-soft-2)", color: "var(--gold)", flexShrink: 0 }}>
+            <svg width="19" height="19" viewBox="0 0 20 20" fill="currentColor"><path d="M5.5 3.5h2l1.2 3-1.4 1c.7 1.6 2 2.9 3.6 3.6l1-1.4 3 1.2v2c0 .8-.7 1.5-1.5 1.5-6 0-11-5-11-11 0-.8.7-1.5 1.5-1.5z" /></svg>
+          </div>
+
+          <div style={{ minWidth: 0 }}>
+            <div style={{ fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.7, fontWeight: 600 }}>Voice line</div>
+            {selected ? (
+              <div style={{ display: "flex", alignItems: "center", gap: 10, marginTop: 3, flexWrap: "wrap" }}>
+                <span className="num" style={{ fontSize: 18, fontWeight: 600, color: "var(--text)", letterSpacing: 0.3 }}>{selected.phone_number}</span>
+                {selected.label && <span style={{ fontSize: 12, color: "var(--text-2)" }}>{selected.label}</span>}
+                {selected.provider && (
+                  <span style={{ fontSize: 10.5, padding: "2px 8px", borderRadius: 999, background: "var(--panel-2)", color: "var(--muted)", border: "1px solid var(--line)", letterSpacing: 0.3 }}>
+                    {selected.provider.replace(/_/g, " ")}
+                  </span>
+                )}
+              </div>
+            ) : numbers.length === 0 && !numErr ? (
+              <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>Loading…</div>
+            ) : (
+              <input
+                placeholder="Paste agent_phone_number_id"
+                value={phoneId}
+                onChange={(e) => setPhoneId(e.target.value)}
+                style={{ ...inputStyle, marginTop: 4, minWidth: 280 }}
+              />
+            )}
+          </div>
+
+          {/* ready dot */}
+          {selected && (
+            <span style={{ marginLeft: "auto", display: "inline-flex", alignItems: "center", gap: 7, fontSize: 11.5, color: "var(--hot)", fontWeight: 600, letterSpacing: 0.3 }}>
+              <span className="live-dot" style={{ background: "var(--hot)" }} /> Ready
+            </span>
           )}
-          {numErr && <span style={{ fontSize: 12, color: "var(--danger)" }}>⚠ {numErr} — paste the ID manually.</span>}
+
+          {/* switch line — only when there's a real choice */}
+          {numbers.length > 1 && (
+            <div style={{ position: "relative", marginLeft: selected ? 0 : "auto" }}>
+              <button style={btn()} onClick={() => setPickerOpen((o) => !o)}>Switch ▾</button>
+              {pickerOpen && (
+                <div className="panel" style={{ position: "absolute", right: 0, top: "calc(100% + 6px)", zIndex: 20, minWidth: 280, boxShadow: "var(--shadow-2)", padding: 6 }}>
+                  {numbers.map((n) => (
+                    <button
+                      key={n.id}
+                      onClick={() => { setPhoneId(n.id); setPickerOpen(false); }}
+                      style={{ display: "block", width: "100%", textAlign: "left", padding: "8px 10px", borderRadius: 7, border: "none", cursor: "pointer", fontSize: 13, background: n.id === phoneId ? "var(--gold-soft)" : "transparent", color: n.id === phoneId ? "var(--gold-2)" : "var(--text-2)" }}
+                    >
+                      <span className="num" style={{ fontWeight: 600 }}>{n.phone_number}</span>
+                      {n.label ? <span style={{ color: "var(--muted)" }}> · {n.label}</span> : ""}
+                    </button>
+                  ))}
+                </div>
+              )}
+            </div>
+          )}
+
+          {numErr && <span style={{ fontSize: 12, color: "var(--danger)", flexBasis: "100%" }}>⚠ {numErr} — paste the ID manually.</span>}
         </div>
       </div>
 
+      {/* ── Live call indicator ─────────────────────────────────────────── */}
+      {activeCall && (
+        <LiveCallCard
+          key={activeCall.conversationId}
+          call={activeCall}
+          onDismiss={() => setActiveCall(null)}
+        />
+      )}
+
+      {/* ── Keypad ──────────────────────────────────────────────────────── */}
       <div style={{ display: "flex", justifyContent: "center" }}>
-        {/* Single call — keypad */}
-        <div className="panel" style={{ width: "100%", maxWidth: 460 }}>
-          <div className="panel-head"><span className="panel-title">Keypad · test call</span></div>
-          <div className="panel-body" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 16 }}>
+        <div className="panel" style={{ width: "100%", maxWidth: 440 }}>
+          <div className="panel-body" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, paddingTop: 26 }}>
             <input
-              style={{ ...inputStyle, maxWidth: 300 }}
+              style={{ ...inputStyle, maxWidth: 280, textAlign: "center" }}
               placeholder="Lead name (optional)"
               value={sName}
               onChange={(e) => setSName(e.target.value)}
             />
 
             {/* number display */}
-            <div style={{ minHeight: 44, display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
+            <div style={{ minHeight: 48, display: "flex", alignItems: "center", justifyContent: "center", width: "100%" }}>
               <input
                 value={sPhone}
                 onChange={(e) => setSPhone(e.target.value)}
@@ -275,7 +468,7 @@ export default function DialerPage() {
                   border: "none",
                   outline: "none",
                   textAlign: "center",
-                  fontSize: 32,
+                  fontSize: 34,
                   fontWeight: 500,
                   letterSpacing: 1,
                   color: "var(--text)",
@@ -286,7 +479,7 @@ export default function DialerPage() {
             </div>
 
             {/* keypad grid */}
-            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 72px)", gap: 14, justifyContent: "center" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 70px)", gap: 16, justifyContent: "center" }}>
               {KEYPAD.map((k) => {
                 const isZero = k.d === "0";
                 return (
@@ -297,8 +490,8 @@ export default function DialerPage() {
                     onPointerUp={isZero ? zeroUp : undefined}
                     onPointerLeave={isZero ? () => { if (zeroHold.current) clearTimeout(zeroHold.current); } : undefined}
                     style={{
-                      width: 72,
-                      height: 72,
+                      width: 70,
+                      height: 70,
                       borderRadius: "50%",
                       border: "1px solid var(--line)",
                       background: "var(--bg-2)",
@@ -309,14 +502,14 @@ export default function DialerPage() {
                       alignItems: "center",
                       justifyContent: "center",
                       gap: 1,
-                      transition: "background 0.1s",
+                      transition: "background 0.1s, transform 0.06s",
                       userSelect: "none",
                     }}
-                    onMouseDown={(e) => (e.currentTarget.style.background = "var(--panel-3)")}
-                    onMouseUp={(e) => (e.currentTarget.style.background = "var(--bg-2)")}
-                    onMouseLeave={(e) => (e.currentTarget.style.background = "var(--bg-2)")}
+                    onMouseDown={(e) => { e.currentTarget.style.background = "var(--panel-3)"; e.currentTarget.style.transform = "scale(0.94)"; }}
+                    onMouseUp={(e) => { e.currentTarget.style.background = "var(--bg-2)"; e.currentTarget.style.transform = "scale(1)"; }}
+                    onMouseLeave={(e) => { e.currentTarget.style.background = "var(--bg-2)"; e.currentTarget.style.transform = "scale(1)"; }}
                   >
-                    <span style={{ fontSize: 26, fontWeight: 500, lineHeight: 1 }}>{k.d}</span>
+                    <span style={{ fontSize: 25, fontWeight: 500, lineHeight: 1 }}>{k.d}</span>
                     {k.sub && <span style={{ fontSize: 9, letterSpacing: 1.5, color: "var(--muted)" }}>{k.sub}</span>}
                   </button>
                 );
@@ -324,41 +517,38 @@ export default function DialerPage() {
             </div>
 
             {/* call row: call button + backspace */}
-            <div style={{ display: "grid", gridTemplateColumns: "72px 72px 72px", gap: 14, alignItems: "center", justifyContent: "center" }}>
+            <div style={{ display: "grid", gridTemplateColumns: "70px 70px 70px", gap: 16, alignItems: "center", justifyContent: "center", marginTop: 4 }}>
               <span />
               <button
-                disabled={!sPhone.trim() || !phoneId || singleBusy}
+                disabled={callDisabled}
                 onClick={placeSingle}
                 title={!phoneId ? "Select a voice number first" : "Call"}
                 style={{
-                  width: 72,
-                  height: 72,
+                  width: 70,
+                  height: 70,
                   borderRadius: "50%",
                   border: "none",
-                  background: !sPhone.trim() || !phoneId || singleBusy ? "var(--line)" : "var(--hot)",
+                  background: callDisabled ? "var(--line)" : "var(--hot)",
                   color: "#0a0908",
-                  cursor: !sPhone.trim() || !phoneId || singleBusy ? "default" : "pointer",
+                  cursor: callDisabled ? "default" : "pointer",
                   display: "flex",
                   alignItems: "center",
                   justifyContent: "center",
-                  boxShadow: !sPhone.trim() || !phoneId || singleBusy ? "none" : "0 4px 14px -2px var(--hot-soft)",
+                  transition: "transform 0.1s, box-shadow 0.15s",
+                  boxShadow: callDisabled ? "none" : "0 6px 18px -4px var(--hot)",
                 }}
               >
                 {singleBusy ? (
                   <span style={{ fontSize: 11, fontWeight: 600 }}>…</span>
-                ) : (
-                  <svg width="26" height="26" viewBox="0 0 20 20" fill="currentColor">
-                    <path d="M5.5 3.5h2l1.2 3-1.4 1c.7 1.6 2 2.9 3.6 3.6l1-1.4 3 1.2v2c0 .8-.7 1.5-1.5 1.5-6 0-11-5-11-11 0-.8.7-1.5 1.5-1.5z" />
-                  </svg>
-                )}
+                ) : PHONE_ICON}
               </button>
               <button
                 onClick={backspace}
                 onDoubleClick={clearAll}
                 aria-label="Backspace"
                 style={{
-                  width: 72,
-                  height: 72,
+                  width: 70,
+                  height: 70,
                   borderRadius: "50%",
                   border: "none",
                   background: "transparent",
@@ -376,10 +566,10 @@ export default function DialerPage() {
               </button>
             </div>
 
-            <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center" }}>
+            <div style={{ fontSize: 11, color: "var(--muted)", textAlign: "center", marginTop: 2 }}>
               Tap a 10-digit number (auto +91) or hold <strong>0</strong> for <strong>+</strong>. Double-tap ⌫ to clear.
             </div>
-            {singleMsg && <div style={{ fontSize: 12, color: "var(--text-2)", textAlign: "center" }}>{singleMsg}</div>}
+            {singleMsg && <div style={{ fontSize: 12, color: "var(--danger)", textAlign: "center" }}>{singleMsg}</div>}
           </div>
         </div>
       </div>
