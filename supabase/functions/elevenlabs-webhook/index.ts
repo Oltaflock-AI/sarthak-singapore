@@ -241,6 +241,20 @@ Deno.serve(async (req) => {
   const intentRaw = collected(dcr, ["intent", "buyer_type", "use_type"]);
   const intent = String(intentRaw ?? "").toLowerCase();
   const siteVisit = collected(dcr, ["site_visit_booked", "appointment_booked", "follow_up_booked"]) === true;
+  // When the agent (or its cal.com tool) books a visit, it should record the slot in a
+  // data-collection field. Best-effort key names; value is free text until normalized.
+  const visitWhenRaw = collected(dcr, [
+    "site_visit_datetime", "site_visit_date", "site_visit_time",
+    "appointment_datetime", "appointment_date", "appointment_time",
+    "scheduled_for", "visit_date", "visit_time", "booking_time",
+  ]);
+  const visitWhen = visitWhenRaw == null ? null : String(visitWhenRaw).trim() || null;
+  // Try to parse an absolute timestamp; keep the raw text as a fallback for the dashboard.
+  const visitWhenIso = (() => {
+    if (!visitWhen) return null;
+    const ms = Date.parse(visitWhen);
+    return Number.isFinite(ms) ? new Date(ms).toISOString() : null;
+  })();
 
   // Heuristic lead_score — ElevenLabs returns no numeric score.
   let lead_score: number | null = null;
@@ -334,6 +348,26 @@ Deno.serve(async (req) => {
 
     const { error: leadErr } = await supabase.from("leads").upsert(leadRow, { onConflict: "phone" });
     if (leadErr) console.error("[elevenlabs-webhook] leads upsert error", leadErr, "row=", leadRow);
+
+    // ── Record the booked site visit so it surfaces in /site-visits ──
+    // One row per call, idempotent on retries via the call_id unique key.
+    if (siteVisit) {
+      const visitRow: Record<string, unknown> = {
+        call_id,
+        lead_phone: canonicalPhone,
+        status: "pending",
+        notes: "Booked via voice agent (cal.com)",
+      };
+      if (lead_name) visitRow.lead_name = lead_name;
+      if (project) visitRow.project = project;
+      if (visitWhenIso) visitRow.scheduled_for = visitWhenIso;
+      if (visitWhen) visitRow.scheduled_for_text = visitWhen;
+
+      const { error: visitErr } = await supabase
+        .from("site_visits")
+        .upsert(visitRow, { onConflict: "call_id" });
+      if (visitErr) console.error("[elevenlabs-webhook] site_visits upsert error", visitErr, "row=", visitRow);
+    }
   }
 
   return json({ ok: true, call_id });

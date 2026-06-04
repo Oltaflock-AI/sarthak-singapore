@@ -19,6 +19,7 @@ Return ONLY this JSON object:
   "outcome": string,           // e.g., "Site visit booked · Saturday 11am", "Qualified · awaiting brochure", "Not interested"
   "language": string | null,   // "hi", "en", "hi-en", etc.
   "site_visit_booked": boolean,
+  "site_visit_datetime": string | null,   // ISO 8601 (Asia/Kolkata) of the agreed visit slot if a specific day/time was set, else null
   "next_action": string | null,
 
   "sentiment": {
@@ -121,6 +122,7 @@ export async function POST(req: NextRequest) {
       timeline: parsed.timeline ?? prevAnalysis.timeline ?? null,
       nri_status: parsed.residency ?? prevAnalysis.nri_status ?? null,
       site_visit_booked: parsed.site_visit_booked ?? prevAnalysis.site_visit_booked ?? false,
+      site_visit_datetime: parsed.site_visit_datetime ?? prevAnalysis.site_visit_datetime ?? null,
       next_action: parsed.next_action ?? prevAnalysis.next_action ?? null,
       sentiment: parsed.sentiment ?? prevAnalysis.sentiment ?? null,
       motivation: parsed.motivation ?? prevAnalysis.motivation ?? null,
@@ -179,6 +181,33 @@ export async function POST(req: NextRequest) {
         source: existingLead?.source ?? "voice_agent",
         status,
       }, { onConflict: "phone" });
+
+      // Mirror booked visits into site_visits so they surface on /site-visits.
+      // Reliable signal: the LLM-derived site_visit_booked (data_collection_results
+      // is empty — the agent has no analysis fields configured). Idempotent on call_id.
+      if (parsed.site_visit_booked) {
+        const whenIso = parsed.site_visit_datetime
+          ? (Number.isFinite(Date.parse(parsed.site_visit_datetime))
+              ? new Date(parsed.site_visit_datetime).toISOString()
+              : null)
+          : null;
+        const visitRow: Record<string, unknown> = {
+          call_id: call.call_id ?? call.id,
+          lead_phone: phone,
+          status: "pending",
+          notes: parsed.outcome ?? "Booked via voice agent",
+        };
+        if (parsed.lead_name ?? existingLead?.name) visitRow.lead_name = parsed.lead_name ?? existingLead?.name;
+        if (parsed.project ?? existingLead?.project) visitRow.project = parsed.project ?? existingLead?.project;
+        if (whenIso) visitRow.scheduled_for = whenIso;
+        if (parsed.site_visit_datetime || parsed.outcome) {
+          visitRow.scheduled_for_text = parsed.site_visit_datetime ?? parsed.outcome;
+        }
+        const { error: visitErr } = await supabase
+          .from("site_visits")
+          .upsert(visitRow, { onConflict: "call_id" });
+        if (visitErr) console.error("[enrich] site_visits upsert error", visitErr, visitRow);
+      }
     }
 
     return NextResponse.json({ ok: true, call: updated });
