@@ -100,6 +100,38 @@ function normalizeTranscript(raw: unknown): TranscriptTurn[] {
     .filter((turn) => turn.text.trim() !== "");
 }
 
+// Authoritative booking truth from the post-call transcript's tool results.
+// A site visit counts as booked ONLY when the cal.com booking tool actually
+// returned a real booking uid — never the agent's `site_visit_booked`
+// data-collection guess, which fires on mere intent or failed attempts.
+// booked=false when unverifiable: we never invent the fact.
+function bookingFromTranscript(
+  raw: unknown,
+): { booked: boolean; startUtc: string | null; uid: string | null } {
+  const out = { booked: false, startUtc: null as string | null, uid: null as string | null };
+  if (!Array.isArray(raw)) return out;
+  for (const turn of raw as Array<Record<string, unknown>>) {
+    const results = turn?.tool_results;
+    for (const r of (Array.isArray(results) ? results : []) as Array<Record<string, unknown>>) {
+      const name = String(r?.tool_name ?? "").toLowerCase();
+      if (!name.includes("cal") || !name.includes("book")) continue;
+      if (r?.is_error) continue;
+      try {
+        const parsed = typeof r?.result_value === "string"
+          ? JSON.parse(r.result_value as string)
+          : r?.result_value;
+        const d = (parsed as Record<string, unknown>)?.data as Record<string, unknown> | undefined;
+        if (d?.uid) {
+          out.booked = true;
+          out.uid = String(d.uid);
+          out.startUtc = d?.start ? String(d.start) : null;
+        }
+      } catch { /* leave as not-booked */ }
+    }
+  }
+  return out;
+}
+
 // data_collection_results entries are { value, rationale, ... }. Unwrap the value.
 function collected(dcr: Record<string, unknown>, keys: string[]): unknown {
   for (const k of keys) {
@@ -232,24 +264,21 @@ Deno.serve(async (req) => {
   // Lead attributes — agent-configured data-collection fields (best-effort key names).
   const lead_name = (collected(dcr, ["lead_name", "callee_name", "name", "customer_name"]) as string) ??
     (pick<string>(dyn, ["user_name", "lead_name", "name"]));
-  const project_val = collected(dcr, ["project_interest", "project", "interested_project"]);
-  const project = project_val ? String(project_val) : null;
+  // Only one project in this campaign — never derive (or invent) another.
+  const project = "Singapore Miracle";
   const language = pick<string>(initCfg, ["conversation_config_override.agent.language"]) ??
     (collected(dcr, ["language", "language_spoken"]) as string | null);
   const timeline = collected(dcr, ["timeline", "purchase_timeline"]);
   const budget = collected(dcr, ["budget", "budget_range"]);
   const intentRaw = collected(dcr, ["intent", "buyer_type", "use_type"]);
   const intent = String(intentRaw ?? "").toLowerCase();
-  const siteVisit = collected(dcr, ["site_visit_booked", "appointment_booked", "follow_up_booked"]) === true;
-  // When the agent (or its cal.com tool) books a visit, it should record the slot in a
-  // data-collection field. Best-effort key names; value is free text until normalized.
-  const visitWhenRaw = collected(dcr, [
-    "site_visit_datetime", "site_visit_date", "site_visit_time",
-    "appointment_datetime", "appointment_date", "appointment_time",
-    "scheduled_for", "visit_date", "visit_time", "booking_time",
-  ]);
-  const visitWhen = visitWhenRaw == null ? null : String(visitWhenRaw).trim() || null;
-  // Try to parse an absolute timestamp; keep the raw text as a fallback for the dashboard.
+  // Booking is authoritative: only a real cal.com tool result counts as booked.
+  // The agent's `site_visit_booked` data-collection field is an LLM guess that
+  // fires on mere intent or failed attempts, so it's NOT used for the fact.
+  const booking = bookingFromTranscript(pick(data, ["transcript"]));
+  const siteVisit = booking.booked;
+  // Only trust a slot once the booking is confirmed — use cal.com's real start.
+  const visitWhen = siteVisit ? booking.startUtc : null;
   const visitWhenIso = (() => {
     if (!visitWhen) return null;
     const ms = Date.parse(visitWhen);
@@ -356,7 +385,7 @@ Deno.serve(async (req) => {
         call_id,
         lead_phone: canonicalPhone,
         status: "pending",
-        notes: "Booked via voice agent (cal.com)",
+        notes: booking.uid ? `Booked via cal.com · ${booking.uid}` : "Booked via voice agent (cal.com)",
       };
       if (lead_name) visitRow.lead_name = lead_name;
       if (project) visitRow.project = project;

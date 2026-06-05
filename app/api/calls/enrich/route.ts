@@ -9,7 +9,7 @@ Return ONLY this JSON object:
 
 {
   "lead_name": string | null,
-  "project": string | null,    // one of: Grand Virasat, Singapore Pink City, Modern City, Oracle City, One Street, King Estate
+  "project": "Singapore Miracle",   // the only project Sarthak Singapore is calling about — always this value
   "buyer_type": "end_use" | "investment" | null,
   "residency": "local" | "nri" | null,
   "timeline": string | null,
@@ -113,13 +113,35 @@ export async function POST(req: NextRequest) {
     });
     const parsed = JSON.parse(response.choices[0].message.content ?? "{}");
 
+    // Authoritative booking truth comes ONLY from the actual cal.com tool result
+    // (calcom_create_booking) — never GPT's transcript reading, which marks
+    // failed attempts and even no-booking conversations as "booked". If we can't
+    // verify a real booking, the call is NOT booked. We never invent the fact.
+    const calBooking = call.call_id
+      ? await getCalBookingOutcome(String(call.call_id))
+      : null;
+    const isBooked = calBooking?.booked === true;
+    // Real booked start from cal.com when present; the model's extracted slot is
+    // only trustworthy once a booking is actually confirmed.
+    const bookedDatetime = isBooked
+      ? (calBooking?.startUtc ?? parsed.site_visit_datetime ?? null)
+      : null;
+
     const update: Record<string, unknown> = {};
     if (parsed.lead_name) update.lead_name = parsed.lead_name;
-    if (parsed.project) update.project = parsed.project;
+    // Only one project in this campaign — set it deterministically, never let
+    // the model pick (or invent) another.
+    update.project = "Singapore Miracle";
     if (typeof parsed.lead_score === "number") update.lead_score = parsed.lead_score;
     if (parsed.score_label) update.score_label = parsed.score_label;
     if (parsed.summary) update.summary = parsed.summary;
-    if (parsed.outcome) update.outcome = parsed.outcome;
+    if (parsed.outcome) {
+      // Don't let GPT's prose assert a booking the cal.com result didn't confirm.
+      const claimsBooking = /\bbook(ed|ing)?\b/i.test(String(parsed.outcome));
+      update.outcome = !isBooked && claimsBooking
+        ? "Spoke with lead · no site visit booked"
+        : parsed.outcome;
+    }
     if (parsed.language) update.language = parsed.language;
 
     // Merge onto the existing Ringg analysis so recording_url, platform_summary,
@@ -131,8 +153,9 @@ export async function POST(req: NextRequest) {
       budget_range: parsed.budget ?? prevAnalysis.budget_range ?? null,
       timeline: parsed.timeline ?? prevAnalysis.timeline ?? null,
       nri_status: parsed.residency ?? prevAnalysis.nri_status ?? null,
-      site_visit_booked: parsed.site_visit_booked ?? prevAnalysis.site_visit_booked ?? false,
-      site_visit_datetime: parsed.site_visit_datetime ?? prevAnalysis.site_visit_datetime ?? null,
+      // Authoritative: only the real cal.com booking result, never GPT's guess.
+      site_visit_booked: isBooked,
+      site_visit_datetime: bookedDatetime,
       next_action: parsed.next_action ?? prevAnalysis.next_action ?? null,
       sentiment: parsed.sentiment ?? prevAnalysis.sentiment ?? null,
       motivation: parsed.motivation ?? prevAnalysis.motivation ?? null,
@@ -153,15 +176,8 @@ export async function POST(req: NextRequest) {
       .single();
     if (upErr) return NextResponse.json({ error: upErr.message }, { status: 500 });
 
-    // Authoritative booking outcome from the actual cal.com tool result (not GPT's
-    // transcript guess, which marks failed attempts as "booked"). null = couldn't
-    // reach the ElevenLabs API → fall back to the transcript-derived flag.
-    const calBooking = call.call_id
-      ? await getCalBookingOutcome(String(call.call_id))
-      : null;
-    const authoritative = calBooking != null && calBooking.attempted;
-    const isBooked = authoritative ? calBooking!.booked : !!parsed.site_visit_booked;
-
+    // Booking truth (calBooking / isBooked) was resolved above from the real
+    // cal.com tool result — reused here for the leads + site_visits writes.
     // Also upsert into leads CRM table so it shows up on /leads.
     // Canonicalize to +E.164 so this matches the webhook's key and never forks
     // into a second (unprefixed) lead row. Collapse any legacy unprefixed row.
@@ -190,7 +206,7 @@ export async function POST(req: NextRequest) {
       await supabase.from("leads").upsert({
         phone,
         name: parsed.lead_name ?? existingLead?.name ?? null,
-        project: parsed.project ?? existingLead?.project ?? null,
+        project: "Singapore Miracle",
         buyer_type: parsed.buyer_type ?? existingLead?.buyer_type ?? null,
         residency: parsed.residency ?? existingLead?.residency ?? null,
         timeline: parsed.timeline ?? existingLead?.timeline ?? null,
@@ -221,7 +237,7 @@ export async function POST(req: NextRequest) {
             : (parsed.outcome ?? "Booked via voice agent"),
         };
         if (parsed.lead_name ?? existingLead?.name) visitRow.lead_name = parsed.lead_name ?? existingLead?.name;
-        if (parsed.project ?? existingLead?.project) visitRow.project = parsed.project ?? existingLead?.project;
+        visitRow.project = "Singapore Miracle";
         if (whenIso) visitRow.scheduled_for = whenIso;
         // Human-readable IST for the dashboard (e.g. "Fri 5 Jun, 2:00 PM").
         if (whenIso) {
@@ -236,8 +252,10 @@ export async function POST(req: NextRequest) {
           .from("site_visits")
           .upsert(visitRow, { onConflict: "call_id" });
         if (visitErr) console.error("[enrich] site_visits upsert error", visitErr, visitRow);
-      } else if (authoritative) {
-        // cal.com was attempted but did NOT book → remove any stale/false-positive row.
+      } else if (calBooking != null) {
+        // We inspected the conversation and found no real cal.com booking →
+        // remove any stale/false-positive row. (When calBooking is null we
+        // couldn't verify, so we leave existing rows untouched.)
         await supabase.from("site_visits").delete().eq("call_id", callKey);
       }
     }
