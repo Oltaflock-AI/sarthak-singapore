@@ -1,7 +1,6 @@
 import type { Metadata } from "next";
 import { Geist, Geist_Mono } from "next/font/google";
 import "./globals.css";
-import { Sidebar } from "@/components/Sidebar";
 
 const geistSans = Geist({ variable: "--font-geist-sans", subsets: ["latin"] });
 const geistMono = Geist_Mono({ variable: "--font-geist-mono", subsets: ["latin"] });
@@ -27,18 +26,7 @@ export default function RootLayout({ children }: Readonly<{ children: React.Reac
           }}
         />
       </head>
-      <body>
-        <div className="shell">
-          <Sidebar />
-          <main>
-            {children}
-            <footer className="foot">
-              <span>Oltaflock × Sarthak Singapore</span>
-              <span>AI Sales Engine · v1.0</span>
-            </footer>
-          </main>
-        </div>
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

@@ -79,6 +79,30 @@ export function Sidebar() {
         <div>admin@oltaflock.ai</div>
         <div style={{ marginTop: 10, fontSize: 10, letterSpacing: 0.4 }}>OLTAFLOCK · v1.0</div>
         <ThemeToggle />
+        <form action="/api/logout" method="post" style={{ marginTop: 12 }}>
+          <button
+            type="submit"
+            style={{
+              display: "flex",
+              alignItems: "center",
+              gap: 8,
+              width: "100%",
+              padding: "8px 10px",
+              borderRadius: 8,
+              border: "1px solid var(--border)",
+              background: "transparent",
+              color: "var(--muted)",
+              fontSize: 12,
+              cursor: "pointer",
+            }}
+          >
+            <svg width="14" height="14" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.6" strokeLinecap="round" strokeLinejoin="round">
+              <path d="M7 3.5H4.5A1.5 1.5 0 0 0 3 5v10a1.5 1.5 0 0 0 1.5 1.5H7" />
+              <path d="M13 14l4-4-4-4M17 10H8" />
+            </svg>
+            Sign out
+          </button>
+        </form>
       </div>
     </aside>
   );
