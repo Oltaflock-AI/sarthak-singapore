@@ -1,29 +1,10 @@
 "use client";
 
 import { useEffect, useState } from "react";
-import { createClient, type SupabaseClient } from "@supabase/supabase-js";
-import { DASHBOARD_SINCE } from "./config";
 
-// Anon client (client-side live polling). Created lazily so importing this
-// module never throws when the NEXT_PUBLIC_* vars are empty at build time
-// (e.g. /_not-found prerender); it is only instantiated on first real use.
-let _anon: SupabaseClient | null = null;
-function getAnon(): SupabaseClient {
-  if (!_anon) {
-    _anon = createClient(
-      process.env.NEXT_PUBLIC_SUPABASE_URL ?? "",
-      process.env.NEXT_PUBLIC_SUPABASE_ANON_KEY ?? ""
-    );
-  }
-  return _anon;
-}
-export const supabase = new Proxy({} as SupabaseClient, {
-  get(_t, prop) {
-    const c = getAnon();
-    const v = c[prop as keyof SupabaseClient];
-    return typeof v === "function" ? v.bind(c) : v;
-  },
-});
+// All reads go through gated server routes (/api/calls), which use the service
+// key behind the password proxy. The client no longer talks to Supabase with
+// the public anon key — that exposed every row to anyone with the bundle.
 
 export interface CallRow {
   id: string;
@@ -50,14 +31,13 @@ export function useLiveData() {
   const [lastSync, setLastSync] = useState<Date>(new Date());
 
   const refetch = async () => {
-    let q = supabase
-      .from("calls")
-      .select("*")
-      .order("created_at", { ascending: false })
-      .limit(100);
-    if (DASHBOARD_SINCE) q = q.gte("created_at", DASHBOARD_SINCE);
-    const { data: c } = await q;
-    setCalls((c as CallRow[]) ?? []);
+    try {
+      const res = await fetch("/api/calls", { cache: "no-store" });
+      const json = await res.json().catch(() => ({}));
+      setCalls((json.calls as CallRow[]) ?? []);
+    } catch {
+      /* leave previous data on transient failure */
+    }
     setLastSync(new Date());
     setLoading(false);
   };
@@ -69,6 +49,21 @@ export function useLiveData() {
   }, []);
 
   return { calls, loading, lastSync, refetch };
+}
+
+// ── One-off reads (gated /api/calls) ────────────────────────────────────────
+export async function fetchCall(id: string): Promise<CallRow | null> {
+  const res = await fetch(`/api/calls?id=${encodeURIComponent(id)}`, { cache: "no-store" });
+  if (!res.ok) return null;
+  const json = await res.json().catch(() => ({}));
+  return (json.call as CallRow) ?? null;
+}
+
+export async function fetchCallsByPhone(phone: string): Promise<CallRow[]> {
+  const res = await fetch(`/api/calls?phone=${encodeURIComponent(phone)}`, { cache: "no-store" });
+  if (!res.ok) return [];
+  const json = await res.json().catch(() => ({}));
+  return (json.calls as CallRow[]) ?? [];
 }
 
 // ── Derived stats helpers ───────────────────────────────────────────────────

@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { supabase, CallRow } from "@/lib/data";
+import { fetchCall, CallRow } from "@/lib/data";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { fmtDuration, timeAgo } from "@/lib/format";
 
@@ -281,8 +281,8 @@ export default function CallDetailPage() {
 
   useEffect(() => {
     const fetchOne = async () => {
-      const { data } = await supabase.from("calls").select("*").eq("id", params.id).maybeSingle();
-      setCall((data as CallRow) ?? null);
+      const data = await fetchCall(String(params.id));
+      setCall(data);
       setLoading(false);
     };
     fetchOne();

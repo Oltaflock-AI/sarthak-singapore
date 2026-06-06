@@ -6,7 +6,7 @@ import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { timeAgo, initials, fmtDuration, fmtDateTime } from "@/lib/format";
-import { supabase } from "@/lib/data";
+import { fetchCallsByPhone } from "@/lib/data";
 
 type Lead = {
   id: string;
@@ -310,16 +310,10 @@ function LeadDetail({ lead, onClose }: { lead: Lead; onClose: () => void }) {
   const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    // Fetch all voice calls for this phone (try with + and without)
-    const phoneClean = lead.phone.replace(/^\+/, "");
-    supabase
-      .from("calls")
-      .select("id,call_id,duration_seconds,outcome,summary,lead_score,score_label,created_at,analysis,transcript")
-      .or(`lead_phone.eq.+${phoneClean},lead_phone.eq.${phoneClean}`)
-      .order("created_at", { ascending: false })
-      .then(({ data }) => {
-        if (Array.isArray(data)) setCalls(data as CallSlim[]);
-      });
+    // Fetch all voice calls for this phone via the gated server route.
+    fetchCallsByPhone(lead.phone).then((rows) => {
+      setCalls(rows as unknown as CallSlim[]);
+    });
   }, [lead.phone]);
 
   async function changeStatus(newStatus: string) {
