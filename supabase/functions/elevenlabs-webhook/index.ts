@@ -339,10 +339,6 @@ Deno.serve(async (req) => {
 
   // ── Mirror into leads CRM (canonical +E.164, dedupes legacy unprefixed) ──
   if (lead_phone) {
-    let status: string | null = null;
-    if (siteVisit) status = "booked";
-    else if (lead_score != null && lead_score >= 60) status = "qualified";
-
     const digits = String(lead_phone).replace(/[^\d]/g, "");
     const canonicalPhone = digits ? `+${digits}` : String(lead_phone);
     const legacyPhone = canonicalPhone.replace(/^\+/, "");
@@ -351,6 +347,15 @@ Deno.serve(async (req) => {
         .from("leads").select("id").eq("phone", legacyPhone).maybeSingle();
       if (legacyRow) await supabase.from("leads").delete().eq("phone", legacyPhone);
     }
+
+    // Status is sticky upward (booked > qualified > new): a later non-booking
+    // call must never downgrade a lead that already booked a verified visit.
+    const { data: existingLead } = await supabase
+      .from("leads").select("status").eq("phone", canonicalPhone).maybeSingle();
+    const prevStatus = existingLead?.status ?? null;
+    let status: string | null = prevStatus;
+    if (siteVisit) status = "booked";
+    else if (prevStatus !== "booked" && lead_score != null && lead_score >= 60) status = "qualified";
 
     const buyer_type =
       /end_use|self_use/.test(intent) ? "end_use" :

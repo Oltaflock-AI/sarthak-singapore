@@ -199,9 +199,11 @@ export async function POST(req: NextRequest) {
         await supabase.from("leads").delete().eq("phone", legacyPhone);
       }
 
+      // Status is sticky upward (booked > qualified > new): a later non-booking
+      // call must never downgrade a lead that already booked a verified visit.
       let status = existingLead?.status ?? "new";
       if (isBooked) status = "booked";
-      else if (parsed.buyer_type || parsed.timeline || parsed.budget) status = "qualified";
+      else if (status !== "booked" && (parsed.buyer_type || parsed.timeline || parsed.budget)) status = "qualified";
 
       await supabase.from("leads").upsert({
         phone,
