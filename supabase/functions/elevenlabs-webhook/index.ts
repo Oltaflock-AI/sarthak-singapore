@@ -187,6 +187,17 @@ Deno.serve(async (req) => {
   const call_id = pick<string>(data, ["conversation_id"]);
   if (!call_id) return json({ ok: true, verified: true }); // probe / unknown shape
 
+  // Only store calls from THIS dashboard's agent. Other agents in the same
+  // ElevenLabs workspace share this workspace-level post-call webhook, but their
+  // calls must not pollute the Sarthak dashboard. ElevenLabs has no per-agent
+  // webhook off switch (a null agent override = inherit workspace), so filter here.
+  const SARTHAK_AGENT_ID =
+    Deno.env.get("ELEVENLABS_AGENT_ID") ?? "agent_7701kt6yb510f5hrpm1tsmjx61w4";
+  const incomingAgentId = pick<string>(data, ["agent_id"]);
+  if (incomingAgentId && incomingAgentId !== SARTHAK_AGENT_ID) {
+    return json({ ok: true, ignored: "other agent", agent_id: incomingAgentId });
+  }
+
   const metadata = (pick<Record<string, unknown>>(data, ["metadata"]) ?? {}) as Record<string, unknown>;
   const phone = (pick<Record<string, unknown>>(metadata, ["phone_call"]) ?? {}) as Record<string, unknown>;
   const initCfg = (pick<Record<string, unknown>>(data, ["conversation_initiation_client_data"]) ?? {}) as Record<string, unknown>;
