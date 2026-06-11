@@ -2,6 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
+import { parseLeadsFile, type ParseResult } from "@/lib/parseLeads";
 import type { LiveCallStatus, CallPhase } from "@/lib/elevenlabs";
 
 interface PhoneNumber {
@@ -216,6 +217,100 @@ function LiveCallCard({ call, onDismiss }: { call: ActiveCall; onDismiss: () => 
   );
 }
 
+// ── Bulk-import preview modal ───────────────────────────────────────────────
+// Shows the cleaned, deduped leads before any dialing starts so the operator
+// can sanity-check the parse (names stripped of "ji", "Unknown" → no-name).
+function ImportPreview({
+  preview, canStart, busy, onCancel, onStart,
+}: {
+  preview: ParseResult;
+  canStart: boolean;
+  busy: boolean;
+  onCancel: () => void;
+  onStart: () => void;
+}) {
+  const { leads, totalRows, noNameCount, duplicates, skipped, nameHeader, phoneHeader } = preview;
+  const stat = (label: string, value: number | string, danger = false) => (
+    <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+      <span className="num" style={{ fontSize: 18, fontWeight: 700, color: danger ? "var(--danger)" : "var(--text)" }}>{value}</span>
+      <span style={{ fontSize: 10.5, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5 }}>{label}</span>
+    </div>
+  );
+
+  return (
+    <div
+      onClick={onCancel}
+      style={{ position: "fixed", inset: 0, zIndex: 50, background: "rgba(0,0,0,0.5)", display: "grid", placeItems: "center", padding: 20 }}
+    >
+      <div
+        onClick={(e) => e.stopPropagation()}
+        className="panel"
+        style={{ width: "100%", maxWidth: 640, maxHeight: "85vh", display: "flex", flexDirection: "column", boxShadow: "var(--shadow-2)" }}
+      >
+        <div className="panel-head">
+          <span className="panel-title">Review import — {leads.length} {leads.length === 1 ? "call" : "calls"} ready</span>
+          <button onClick={onCancel} style={{ background: "none", border: "none", color: "var(--muted)", cursor: "pointer", fontSize: 18, lineHeight: 1 }}>×</button>
+        </div>
+
+        <div className="panel-body" style={{ display: "flex", gap: 24, flexWrap: "wrap", borderBottom: "1px solid var(--line)" }}>
+          {stat("Will dial", leads.length)}
+          {stat("Rows read", totalRows)}
+          {stat("No name → generic", noNameCount)}
+          {duplicates > 0 && stat("Duplicates skipped", duplicates)}
+          {skipped.length > 0 && stat("Bad/no phone", skipped.length, true)}
+        </div>
+
+        <div style={{ padding: "8px 20px", fontSize: 11.5, color: "var(--muted)", borderBottom: "1px solid var(--line)" }}>
+          Columns: <strong style={{ color: "var(--text-2)" }}>{nameHeader || "(name inferred)"}</strong> · <strong style={{ color: "var(--text-2)" }}>{phoneHeader || "(phone inferred)"}</strong>
+          {" · "}the agent appends “जी”, so a no-name lead is greeted without a name.
+        </div>
+
+        <div style={{ overflowY: "auto", flex: 1 }}>
+          <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
+            <thead>
+              <tr style={{ color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, position: "sticky", top: 0, background: "var(--panel)" }}>
+                <th style={{ textAlign: "left", padding: "9px 20px" }}>#</th>
+                <th style={{ textAlign: "left", padding: "9px 12px" }}>Name</th>
+                <th style={{ textAlign: "left", padding: "9px 20px" }}>Phone</th>
+              </tr>
+            </thead>
+            <tbody>
+              {leads.map((l, i) => (
+                <tr key={`${l.phone}-${i}`} style={{ borderTop: "1px solid var(--line)" }}>
+                  <td style={{ padding: "8px 20px", color: "var(--muted)" }} className="num">{i + 1}</td>
+                  <td style={{ padding: "8px 12px", color: l.name ? "var(--text)" : "var(--muted)", fontStyle: l.name ? "normal" : "italic" }}>
+                    {l.name || "no name → generic greeting"}
+                    {l.name && l.rawName && l.rawName !== l.name && (
+                      <span style={{ color: "var(--muted)", fontSize: 11 }}> (from “{l.rawName}”)</span>
+                    )}
+                  </td>
+                  <td style={{ padding: "8px 20px", color: "var(--text-2)" }} className="num">{l.phone}</td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </div>
+
+        <div className="panel-body" style={{ borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
+          <span style={{ fontSize: 12, color: canStart ? "var(--muted)" : "var(--danger)" }}>
+            {canStart ? "Calls dial one at a time through the selected voice line." : "Select a voice line first (top of the page)."}
+          </span>
+          <div style={{ display: "flex", gap: 10 }}>
+            <button onClick={onCancel} style={{ ...btn(), padding: "9px 16px" }}>Cancel</button>
+            <button
+              onClick={onStart}
+              disabled={!canStart || busy}
+              style={{ ...btn(true), padding: "9px 18px", opacity: !canStart || busy ? 0.5 : 1, cursor: !canStart || busy ? "default" : "pointer" }}
+            >
+              {busy ? "Starting…" : `Start ${leads.length} ${leads.length === 1 ? "call" : "calls"}`}
+            </button>
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export default function DialerPage() {
   const [numbers, setNumbers] = useState<PhoneNumber[]>([]);
   const [numErr, setNumErr] = useState<string | null>(null);
@@ -237,6 +332,13 @@ export default function DialerPage() {
   const [batch, setBatch] = useState<Batch | null>(null);
   const [rows, setRows] = useState<QueueRow[]>([]);
   const loopRef = useRef<ReturnType<typeof setInterval> | null>(null);
+
+  // bulk import (CSV/XLSX)
+  const fileInput = useRef<HTMLInputElement | null>(null);
+  const [parsing, setParsing] = useState(false);
+  const [parseErr, setParseErr] = useState<string | null>(null);
+  const [preview, setPreview] = useState<ParseResult | null>(null);
+  const [bulkBusy, setBulkBusy] = useState(false);
 
   // ── load phone numbers + restore saved selection ──────────────────────────
   useEffect(() => {
@@ -330,6 +432,57 @@ export default function DialerPage() {
     }
   }
 
+  // ── bulk import ──────────────────────────────────────────────────────────
+  async function onFilePicked(e: React.ChangeEvent<HTMLInputElement>) {
+    const file = e.target.files?.[0];
+    e.target.value = ""; // allow re-picking the same file
+    if (!file) return;
+    setParseErr(null);
+    setParsing(true);
+    try {
+      const result = await parseLeadsFile(file);
+      if (!result.ok) {
+        setParseErr(result.error || "Couldn't read the file.");
+      } else if (result.leads.length === 0) {
+        setParseErr("No dialable rows found — every row was missing a valid phone number.");
+      } else {
+        setPreview(result);
+      }
+    } catch {
+      setParseErr("Couldn't read the file. Upload a .csv, .xlsx, or .xls.");
+    } finally {
+      setParsing(false);
+    }
+  }
+
+  async function startBulk() {
+    if (!preview || !phoneId || bulkBusy) return;
+    setBulkBusy(true);
+    try {
+      const r = await fetch("/api/voice/bulk", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          agent_phone_number_id: phoneId,
+          label: "Bulk import",
+          leads: preview.leads.map((l) => ({ name: l.name, phone: l.phone })),
+        }),
+      }).then((x) => x.json());
+      if (r?.ok) {
+        setPreview(null);
+        await refetchBatch(r.batch_id);
+        setBatch((b) => b ?? { id: r.batch_id, label: "Bulk import", status: "running", concurrency: 1 });
+        startLoop(r.batch_id);
+      } else {
+        setParseErr(`Failed to start: ${r?.error ?? "unknown error"}`);
+      }
+    } catch (e) {
+      setParseErr(`Failed to start: ${String(e)}`);
+    } finally {
+      setBulkBusy(false);
+    }
+  }
+
   async function control(action: "pause" | "resume" | "cancel") {
     if (!batch) return;
     await fetch("/api/voice/queue", {
@@ -371,7 +524,56 @@ export default function DialerPage() {
 
   return (
     <>
-      <PageHeader title="Dialer" subtitle="Place a call through the ElevenLabs voice agent" />
+      <PageHeader
+        title="Dialer"
+        subtitle="Place a call through the ElevenLabs voice agent"
+        right={
+          <>
+            <input
+              ref={fileInput}
+              type="file"
+              accept=".csv,.xlsx,.xls,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet,application/vnd.ms-excel"
+              style={{ display: "none" }}
+              onChange={onFilePicked}
+            />
+            <button
+              onClick={() => fileInput.current?.click()}
+              disabled={parsing}
+              title="Bulk call from a CSV or XLSX of leads"
+              style={{
+                display: "inline-flex", alignItems: "center", gap: 7,
+                padding: "7px 13px", borderRadius: 8, fontSize: 12.5, fontWeight: 600,
+                cursor: parsing ? "default" : "pointer",
+                border: "1px solid var(--gold-dim)", background: "var(--gold-soft)", color: "var(--gold-2)",
+              }}
+            >
+              <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" />
+                <polyline points="17 8 12 3 7 8" />
+                <line x1="12" y1="3" x2="12" y2="15" />
+              </svg>
+              {parsing ? "Reading…" : "Import CSV / XLSX"}
+            </button>
+          </>
+        }
+      />
+
+      {parseErr && (
+        <div style={{ marginBottom: 14, padding: "10px 16px", background: "var(--danger-soft)", border: "1px solid var(--danger-soft)", borderRadius: 8, fontSize: 12.5, color: "var(--danger)", display: "flex", justifyContent: "space-between", gap: 12 }}>
+          <span>⚠ {parseErr}</span>
+          <button onClick={() => setParseErr(null)} style={{ background: "none", border: "none", color: "var(--danger)", cursor: "pointer", fontWeight: 600 }}>Dismiss</button>
+        </div>
+      )}
+
+      {preview && (
+        <ImportPreview
+          preview={preview}
+          canStart={!!phoneId}
+          busy={bulkBusy}
+          onCancel={() => setPreview(null)}
+          onStart={startBulk}
+        />
+      )}
 
       {/* ── Voice line card ─────────────────────────────────────────────── */}
       <div className="panel" style={{ marginBottom: 18 }}>

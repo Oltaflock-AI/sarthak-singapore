@@ -173,10 +173,30 @@ export async function getLiveCallStatus(
   };
 }
 
+// The default first message asks "…{{callee_name}} जी से बात हो रही है?". For a
+// lead with no name we send THIS instead (per-call first_message override), so
+// the agent just introduces itself and never says "Unknown जी" / "ग्राहक जी".
+// Requires `first_message` to be allowed in the agent's overrides.
+export const UNKNOWN_FIRST_MESSAGE =
+  "नमस्ते, मैं प्रिया बोल रही हूँ Sarthak Singapore Group से।";
+
+// Greeting params for an outbound call. Named lead → pass callee_name and let
+// the agent's default first message greet them by name. No name → name-less
+// first message override.
+export function greetingFor(leadName: string | null | undefined): {
+  dynamicVars: Record<string, string>;
+  firstMessageOverride?: string;
+} {
+  const name = (leadName ?? "").trim();
+  if (name) return { dynamicVars: { callee_name: name, lead_name: name } };
+  return { dynamicVars: {}, firstMessageOverride: UNKNOWN_FIRST_MESSAGE };
+}
+
 export async function placeOutboundCall(opts: {
   agentPhoneNumberId: string;
   toNumber: string;
   dynamicVars?: Record<string, string>;
+  firstMessageOverride?: string;
 }): Promise<OutboundResult> {
   const body: Record<string, unknown> = {
     agent_id: AGENT_ID,
@@ -188,8 +208,13 @@ export async function placeOutboundCall(opts: {
         Object.entries(opts.dynamicVars).filter(([, v]) => v != null && v !== ""),
       )
     : {};
-  if (Object.keys(vars).length) {
-    body.conversation_initiation_client_data = { dynamic_variables: vars };
+  const cicd: Record<string, unknown> = {};
+  if (Object.keys(vars).length) cicd.dynamic_variables = vars;
+  if (opts.firstMessageOverride) {
+    cicd.conversation_config_override = { agent: { first_message: opts.firstMessageOverride } };
+  }
+  if (Object.keys(cicd).length) {
+    body.conversation_initiation_client_data = cicd;
   }
 
   const res = await fetch(`${API_BASE}/sip-trunk/outbound-call`, {

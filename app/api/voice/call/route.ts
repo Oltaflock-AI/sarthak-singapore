@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { placeOutboundCall } from "@/lib/elevenlabs";
+import { placeOutboundCall, greetingFor } from "@/lib/elevenlabs";
+import { cleanLeadName } from "@/lib/leadImport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -15,7 +16,9 @@ export async function POST(req: NextRequest) {
   if (!agentPhoneNumberId)
     return NextResponse.json({ error: "agent_phone_number_id required" }, { status: 400 });
 
-  const leadName: string | null = body?.lead_name ?? null;
+  // Clean the typed name the same way as imports: strip a trailing "ji",
+  // treat "Unknown"/blank as no-name (→ name-less greeting).
+  const leadName: string | null = cleanLeadName(body?.lead_name);
   const project: string | null = body?.project ?? null;
 
   const { data: batch, error: bErr } = await supabase
@@ -43,14 +46,14 @@ export async function POST(req: NextRequest) {
     .single();
   if (qErr) return NextResponse.json({ error: qErr.message }, { status: 500 });
 
-  // Dial right now. The agent's first message requires {{callee_name}} —
-  // omitting it fails the call instantly, so always send it (with a fallback).
-  const dyn: Record<string, string> = { callee_name: leadName || "ग्राहक" };
-  if (leadName) dyn.lead_name = leadName;
+  // Dial right now. Named lead → greet by name; no name → name-less first
+  // message override (handled by greetingFor).
+  const greet = greetingFor(leadName);
+  const dyn: Record<string, string> = { ...greet.dynamicVars };
   if (project) dyn.project = project;
 
   try {
-    const r = await placeOutboundCall({ agentPhoneNumberId, toNumber, dynamicVars: dyn });
+    const r = await placeOutboundCall({ agentPhoneNumberId, toNumber, dynamicVars: dyn, firstMessageOverride: greet.firstMessageOverride });
     await supabase
       .from("call_queue")
       .update({

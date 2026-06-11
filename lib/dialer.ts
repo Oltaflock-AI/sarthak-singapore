@@ -8,7 +8,8 @@
 // row after STALE_MIN is force-failed so the queue never wedges.
 
 import { supabase } from "@/lib/supabase";
-import { placeOutboundCall } from "@/lib/elevenlabs";
+import { placeOutboundCall, greetingFor } from "@/lib/elevenlabs";
+import { cleanLeadName } from "@/lib/leadImport";
 
 const STALE_MIN = 6;
 
@@ -104,22 +105,25 @@ async function dialNext(
       continue;
     }
 
-    // Strip control keys before sending dynamic vars to the agent.
+    // Strip control keys before sending dynamic vars to the agent. callee_name
+    // is set by greetingFor below, so drop any stale copy from the queue row.
     const dyn: Record<string, string> = {};
     for (const [k, v] of Object.entries(next.dynamic_vars ?? {})) {
-      if (k === "agent_phone_number_id") continue;
+      if (k === "agent_phone_number_id" || k === "callee_name") continue;
       if (v != null) dyn[k] = String(v);
     }
-    if (next.lead_name) dyn.lead_name = next.lead_name;
     if (next.project) dyn.project = next.project;
-    // Agent's first message requires {{callee_name}} — always send it.
-    if (!dyn.callee_name) dyn.callee_name = next.lead_name || "ग्राहक";
+    // Named lead → greet by name (default first message); no name → name-less
+    // first-message override (never "Unknown जी" / "ग्राहक जी").
+    const greet = greetingFor(cleanLeadName(next.lead_name));
+    Object.assign(dyn, greet.dynamicVars);
 
     try {
       const r = await placeOutboundCall({
         agentPhoneNumberId,
         toNumber: next.lead_phone,
         dynamicVars: dyn,
+        firstMessageOverride: greet.firstMessageOverride,
       });
       await supabase
         .from("call_queue")
