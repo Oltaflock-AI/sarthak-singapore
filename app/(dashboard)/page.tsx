@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Script from "next/script";
 import Link from "next/link";
-import { useLiveData } from "@/lib/data";
+import { useLiveData, isMissedCall } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { KpiCard } from "@/components/KpiCard";
 
@@ -45,6 +45,7 @@ const ICONS = {
 
 export default function Overview() {
   const { calls } = useLiveData();
+  const connectedCalls = calls.filter((c) => !isMissedCall(c)).length;
   const [leads, setLeads] = useState<Lead[]>(() => cachedLeads);
   const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
   const chartRefs = useRef<{ source: unknown; status: unknown }>({ source: null, status: null });
@@ -204,7 +205,7 @@ export default function Overview() {
 
       {/* Primary KPIs */}
       <div className="kpi-grid">
-        <KpiCard label="Total Leads" value={metrics.total} sub={`+${todayLeads} today · ${calls.length} voice calls`} icon={ICONS.leads} />
+        <KpiCard label="Total Leads" value={metrics.total} sub={`+${todayLeads} today · ${connectedCalls} voice calls`} icon={ICONS.leads} />
         <KpiCard label="Qualified" value={metrics.qualified + metrics.booked + metrics.converted} sub={`${qualificationRate}% qualification rate`} icon={ICONS.qualified} />
         <KpiCard label="Site Visits Booked" value={metrics.booked + metrics.converted} sub={`${todayBookings.length} booked today`} icon={ICONS.visits} />
         <KpiCard label="Conversion Rate" value={`${conversionRate}%`} sub={`${metrics.converted} converted · avg score ${avgScore}`} icon={ICONS.conv} />

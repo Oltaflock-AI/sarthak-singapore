@@ -2,7 +2,7 @@
 
 import Link from "next/link";
 import { usePathname } from "next/navigation";
-import { useLiveData, bucketByScore } from "@/lib/data";
+import { useLiveData, bucketByScore, isMissedCall } from "@/lib/data";
 import { ThemeToggle } from "@/components/ThemeToggle";
 
 const ICONS = {
@@ -39,10 +39,13 @@ export function Sidebar() {
   const pathname = usePathname();
   const { calls } = useLiveData();
   const { hot } = bucketByScore(calls);
+  // Badge reflects connected conversations — missed (not-picked-up) calls live
+  // under their own tab and shouldn't inflate the headline count.
+  const connectedCount = calls.filter((c) => !isMissedCall(c)).length;
 
   const links: { href: string; label: string; icon: React.ReactNode; count?: number; pulse?: boolean }[] = [
     { href: "/", label: "Overview", icon: ICONS.overview },
-    { href: "/calls", label: "Voice Calls", icon: ICONS.voice, count: calls.length },
+    { href: "/calls", label: "Voice Calls", icon: ICONS.voice, count: connectedCount },
     { href: "/dialer", label: "Dialer", icon: ICONS.dialer },
     { href: "/leads", label: "Leads", icon: ICONS.leads, count: hot.length, pulse: hot.length > 0 },
     { href: "/site-visits", label: "Site Visits", icon: ICONS.visits },

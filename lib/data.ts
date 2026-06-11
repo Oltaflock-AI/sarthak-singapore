@@ -66,6 +66,25 @@ export async function fetchCallsByPhone(phone: string): Promise<CallRow[]> {
   return (json.calls as CallRow[]) ?? [];
 }
 
+// A "missed" call never connected (busy / no answer / rejected): the webhook's
+// call_initiation_failure path flags it, and it has no transcript and 0 duration.
+// These are kept out of the main Voice Calls list and shown under their own tab.
+export function isMissedCall(c: CallRow): boolean {
+  const a = (c.analysis ?? {}) as Record<string, unknown>;
+  if (a.call_initiation_failure === true) return true;
+  const noTranscript = !c.transcript || c.transcript.length === 0;
+  return (c.duration_seconds ?? 0) === 0 && noTranscript;
+}
+
+// Human-readable reason a call didn't connect, from the stored outcome.
+export function missedReason(c: CallRow): string {
+  const o = (c.outcome ?? "").toLowerCase();
+  if (o.includes("busy")) return "Busy";
+  if (o.includes("no-answer") || o.includes("no_answer") || o.includes("no answer")) return "No answer";
+  if (o.includes("reject")) return "Rejected";
+  return "Busy, no answer, or rejected";
+}
+
 // ── Derived stats helpers ───────────────────────────────────────────────────
 export function bucketByScore(calls: CallRow[]) {
   const hot: CallRow[] = [];
