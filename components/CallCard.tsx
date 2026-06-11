@@ -107,9 +107,9 @@ export function CallCard({ call }: Props) {
       }}>
         <div style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}>
           <span style={{ fontWeight: 700, fontSize: 15, letterSpacing: -0.2 }}>
-            {call.lead_name ? humanize(call.lead_name) : "Unknown caller"}
+            {call.lead_name ? humanize(call.lead_name) : (call.lead_phone || "Unknown caller")}
           </span>
-          {call.lead_phone && (
+          {call.lead_name && call.lead_phone && (
             <span className="num" style={{ fontSize: 11, color: "var(--muted)", letterSpacing: 0.3 }}>
               {call.lead_phone}
             </span>

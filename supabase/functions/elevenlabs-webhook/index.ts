@@ -213,6 +213,29 @@ Deno.serve(async (req) => {
     const failPhone = failDir === "inbound"
       ? pick<string>(failBody, ["from_number"])
       : pick<string>(failBody, ["to_number"]);
+    const canonicalPhone = failPhone
+      ? (() => { const d = String(failPhone).replace(/[^\d]/g, ""); return d ? `+${d}` : String(failPhone); })()
+      : null;
+
+    // The call never connected, so there's no transcript to name the lead.
+    // Recover the identity we already know: the dialer wrote it onto the
+    // call_queue row (keyed by this conversation_id) when it placed the call;
+    // dynamic vars in the payload and an existing leads row are fallbacks.
+    // Without this every missed call shows on the dashboard as "Unknown caller".
+    let failName = pick<string>(dyn, ["lead_name", "user_name", "name"]); // not callee_name (defaults to "ग्राहक")
+    let failProject = pick<string>(dyn, ["project"]);
+    const { data: queued } = await supabase
+      .from("call_queue").select("lead_name, project").eq("conversation_id", call_id).maybeSingle();
+    if (!failName && queued?.lead_name) failName = String(queued.lead_name);
+    if (!failProject && queued?.project) failProject = String(queued.project);
+
+    let existingStatus: string | null = null;
+    if (canonicalPhone) {
+      const { data: lead } = await supabase
+        .from("leads").select("name, status").eq("phone", canonicalPhone).maybeSingle();
+      if (!failName && lead?.name) failName = String(lead.name);
+      existingStatus = (lead?.status as string) ?? null;
+    }
 
     const row: Record<string, unknown> = {
       call_id,
@@ -230,20 +253,27 @@ Deno.serve(async (req) => {
       },
     };
     if (failPhone) row.lead_phone = String(failPhone);
+    if (failName) row.lead_name = failName;
+    if (failProject) row.project = failProject;
 
     const { error } = await supabase.from("calls").upsert(row, { onConflict: "call_id" });
     if (error) {
       console.error("[elevenlabs-webhook] failure upsert error", error, row);
       return json({ ok: false, error: error.message }, 500);
     }
-    // Mirror a thin lead so missed contacts still surface in /leads.
-    if (failPhone) {
-      const digits = String(failPhone).replace(/[^\d]/g, "");
-      const canonicalPhone = digits ? `+${digits}` : String(failPhone);
-      await supabase.from("leads").upsert(
-        { phone: canonicalPhone, source: "voice_agent", status: "no_answer", updated_at: new Date().toISOString() },
-        { onConflict: "phone" },
-      );
+    // Mirror a thin lead so missed contacts still surface in /leads — now with
+    // the recovered name. Never downgrade a lead already tracked at a higher
+    // status (qualified/booked); only mark no_answer for a brand-new contact.
+    if (canonicalPhone) {
+      const leadRow: Record<string, unknown> = {
+        phone: canonicalPhone,
+        source: "voice_agent",
+        updated_at: new Date().toISOString(),
+      };
+      if (failName) leadRow.name = failName;
+      if (failProject) leadRow.project = failProject;
+      if (!existingStatus) leadRow.status = "no_answer";
+      await supabase.from("leads").upsert(leadRow, { onConflict: "phone" });
     }
     return json({ ok: true, call_id, type, failure_reason });
   }

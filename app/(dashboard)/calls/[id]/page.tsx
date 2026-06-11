@@ -367,7 +367,7 @@ export default function CallDetailPage() {
       <div style={{ marginBottom: 24 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap", marginBottom: 10 }}>
           <h1 style={{ fontSize: 28, fontWeight: 700, margin: 0, letterSpacing: -0.4 }}>
-            {call.lead_name ? humanize(call.lead_name) : "Unknown caller"}
+            {call.lead_name ? humanize(call.lead_name) : (call.lead_phone || "Unknown caller")}
           </h1>
           <ScoreBadge score={call.lead_score} />
           {visitBooked && (
