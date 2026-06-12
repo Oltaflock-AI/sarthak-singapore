@@ -23,6 +23,8 @@ interface QueueRow {
   conversation_id: string | null;
   last_error: string | null;
   attempts: number;
+  max_attempts: number;
+  next_attempt_at: string | null;
 }
 
 interface Batch {
@@ -30,6 +32,9 @@ interface Batch {
   label: string;
   status: string;
   concurrency: number;
+  ringing_timeout_secs?: number;
+  retry_interval_minutes?: number;
+  max_attempts?: number;
 }
 
 interface ActiveCall {
@@ -340,6 +345,17 @@ export default function DialerPage() {
   const [preview, setPreview] = useState<ParseResult | null>(null);
   const [bulkBusy, setBulkBusy] = useState(false);
 
+  // batch campaign form (options also apply to CSV/XLSX imports)
+  const [cLabel, setCLabel] = useState("");
+  const [cLeads, setCLeads] = useState("");
+  const [cConcurrency, setCConcurrency] = useState(1);
+  const [cRingSecs, setCRingSecs] = useState(60);
+  const [cRetry, setCRetry] = useState(true);
+  const [cRetryHours, setCRetryHours] = useState(2);
+  const [cMaxAttempts, setCMaxAttempts] = useState(3);
+  const [cBusy, setCBusy] = useState(false);
+  const [cMsg, setCMsg] = useState<string | null>(null);
+
   // ── load phone numbers + restore saved selection ──────────────────────────
   useEffect(() => {
     fetch("/api/voice/phone-numbers")
@@ -395,6 +411,24 @@ export default function DialerPage() {
   );
 
   useEffect(() => () => stopLoop(), [stopLoop]);
+
+  // Re-attach to the most recent open batch (e.g. after a page reload) so the
+  // monitor + browser tick loop resume. The Vercel cron keeps dialing anyway.
+  useEffect(() => {
+    fetch("/api/voice/queue")
+      .then((r) => r.json())
+      .then((d) => {
+        const open = (d?.batches ?? []).find(
+          (b: Batch) => b.status === "running" || b.status === "paused",
+        );
+        if (open) {
+          refetchBatch(open.id);
+          if (open.status === "running") startLoop(open.id);
+        }
+      })
+      .catch(() => {});
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // ── actions ────────────────────────────────────────────────────────────────
   async function placeSingle() {
@@ -466,12 +500,16 @@ export default function DialerPage() {
           agent_phone_number_id: phoneId,
           label: "Bulk import",
           leads: preview.leads.map((l) => ({ name: l.name, phone: l.phone })),
+          concurrency: cConcurrency,
+          ringing_timeout_secs: cRingSecs,
+          retry_interval_minutes: cRetry ? Math.round(cRetryHours * 60) : 120,
+          max_attempts: cRetry ? cMaxAttempts : 1,
         }),
       }).then((x) => x.json());
       if (r?.ok) {
         setPreview(null);
         await refetchBatch(r.batch_id);
-        setBatch((b) => b ?? { id: r.batch_id, label: "Bulk import", status: "running", concurrency: 1 });
+        setBatch((b) => b ?? { id: r.batch_id, label: "Bulk import", status: "running", concurrency: cConcurrency });
         startLoop(r.batch_id);
       } else {
         setParseErr(`Failed to start: ${r?.error ?? "unknown error"}`);
@@ -480,6 +518,57 @@ export default function DialerPage() {
       setParseErr(`Failed to start: ${String(e)}`);
     } finally {
       setBulkBusy(false);
+    }
+  }
+
+  // One lead per line: "phone" | "name, phone" | "name, phone, project".
+  // The phone field is whichever comma-separated part looks like a number.
+  const parsedLeads = useMemo(() => {
+    const out: { lead_name: string | null; lead_phone: string; project: string | null }[] = [];
+    for (const line of cLeads.split("\n")) {
+      const parts = line.split(",").map((p) => p.trim()).filter(Boolean);
+      if (!parts.length) continue;
+      const phoneIdx = parts.findIndex((p) => /^\+?[\d\s-]{8,}$/.test(p));
+      if (phoneIdx === -1) continue;
+      const rest = parts.filter((_, i) => i !== phoneIdx);
+      out.push({
+        lead_name: rest[0] ?? null,
+        lead_phone: parts[phoneIdx].replace(/[\s-]/g, ""),
+        project: rest[1] ?? null,
+      });
+    }
+    return out;
+  }, [cLeads]);
+
+  async function startCampaign() {
+    if (!parsedLeads.length || !phoneId || cBusy) return;
+    setCBusy(true);
+    setCMsg(null);
+    try {
+      const r = await fetch("/api/voice/queue", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          label: cLabel.trim() || `Campaign · ${parsedLeads.length} leads`,
+          agent_phone_number_id: phoneId,
+          rows: parsedLeads,
+          concurrency: cConcurrency,
+          ringing_timeout_secs: cRingSecs,
+          retry_interval_minutes: cRetry ? Math.round(cRetryHours * 60) : 120,
+          max_attempts: cRetry ? cMaxAttempts : 1,
+        }),
+      }).then((x) => x.json());
+      if (r?.ok) {
+        setCLeads(""); setCLabel("");
+        await refetchBatch(r.batch_id);
+        startLoop(r.batch_id);
+      } else {
+        setCMsg(`Failed: ${r?.error ?? "unknown error"}`);
+      }
+    } catch (e) {
+      setCMsg(`Failed: ${String(e)}`);
+    } finally {
+      setCBusy(false);
     }
   }
 
@@ -776,6 +865,90 @@ export default function DialerPage() {
         </div>
       </div>
 
+      {/* ── Batch calling ───────────────────────────────────────────────── */}
+      <div className="panel" style={{ marginTop: 18 }}>
+        <div className="panel-head">
+          <div className="panel-title">Batch calling</div>
+          <span style={{ fontSize: 11.5, color: "var(--muted)" }}>
+            {parsedLeads.length ? `${parsedLeads.length} lead${parsedLeads.length === 1 ? "" : "s"} ready` : "Paste leads below"}
+          </span>
+        </div>
+        <div className="panel-body" style={{ display: "flex", flexDirection: "column", gap: 14 }}>
+          <input
+            style={inputStyle}
+            placeholder="Campaign name (optional)"
+            value={cLabel}
+            onChange={(e) => setCLabel(e.target.value)}
+          />
+          <div>
+            <textarea
+              style={{ ...inputStyle, minHeight: 110, resize: "vertical", fontFamily: "inherit", lineHeight: 1.6 }}
+              placeholder={"One lead per line:\nRahul Sharma, 9876543210, Skyline Towers\nPriya, +919812345678\n9898989898"}
+              value={cLeads}
+              onChange={(e) => setCLeads(e.target.value)}
+            />
+            <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5 }}>
+              Format: name, phone, project — phone alone also works (10 digits auto +91).
+            </div>
+          </div>
+
+          {/* options */}
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
+            <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+              Parallel calls
+              <input
+                type="number" min={1} max={10}
+                style={{ ...inputStyle, textTransform: "none", letterSpacing: 0 }}
+                value={cConcurrency}
+                onChange={(e) => setCConcurrency(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+              Ring timeout (sec)
+              <input
+                type="number" min={10} max={120}
+                style={{ ...inputStyle, textTransform: "none", letterSpacing: 0 }}
+                value={cRingSecs}
+                onChange={(e) => setCRingSecs(Math.min(120, Math.max(10, Number(e.target.value) || 60)))}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+              Call back every (hrs)
+              <input
+                type="number" min={0.5} max={24} step={0.5} disabled={!cRetry}
+                style={{ ...inputStyle, textTransform: "none", letterSpacing: 0, opacity: cRetry ? 1 : 0.4 }}
+                value={cRetryHours}
+                onChange={(e) => setCRetryHours(Math.min(24, Math.max(0.5, Number(e.target.value) || 2)))}
+              />
+            </label>
+            <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+              Max attempts
+              <input
+                type="number" min={1} max={10} disabled={!cRetry}
+                style={{ ...inputStyle, textTransform: "none", letterSpacing: 0, opacity: cRetry ? 1 : 0.4 }}
+                value={cMaxAttempts}
+                onChange={(e) => setCMaxAttempts(Math.min(10, Math.max(1, Number(e.target.value) || 3)))}
+              />
+            </label>
+          </div>
+
+          <div style={{ display: "flex", alignItems: "center", gap: 14, flexWrap: "wrap" }}>
+            <label style={{ display: "flex", alignItems: "center", gap: 8, fontSize: 12.5, color: "var(--text-2)", cursor: "pointer" }}>
+              <input type="checkbox" checked={cRetry} onChange={(e) => setCRetry(e.target.checked)} />
+              Call back leads who don&apos;t pick up
+            </label>
+            <button
+              style={{ ...btn(true), marginLeft: "auto", opacity: !parsedLeads.length || !phoneId || cBusy ? 0.5 : 1 }}
+              disabled={!parsedLeads.length || !phoneId || cBusy}
+              onClick={startCampaign}
+            >
+              {cBusy ? "Starting…" : `Start batch (${parsedLeads.length})`}
+            </button>
+          </div>
+          {cMsg && <div style={{ fontSize: 12, color: "var(--danger)" }}>{cMsg}</div>}
+        </div>
+      </div>
+
       {/* Live queue */}
       {batch && (
         <div className="panel" style={{ marginTop: 18 }}>
@@ -806,21 +979,32 @@ export default function DialerPage() {
                   <th style={{ textAlign: "left", padding: "10px 12px" }}>Phone</th>
                   <th style={{ textAlign: "left", padding: "10px 12px" }}>Project</th>
                   <th style={{ textAlign: "left", padding: "10px 12px" }}>Status</th>
+                  <th style={{ textAlign: "left", padding: "10px 12px" }}>Tries</th>
                   <th style={{ textAlign: "left", padding: "10px 20px" }}>Note</th>
                 </tr>
               </thead>
               <tbody>
-                {rows.map((r) => (
+                {rows.map((r) => {
+                  const retryAt = r.status === "queued" && r.next_attempt_at && new Date(r.next_attempt_at) > new Date()
+                    ? new Date(r.next_attempt_at)
+                    : null;
+                  return (
                   <tr key={r.id} style={{ borderTop: "1px solid var(--line)" }}>
                     <td style={{ padding: "10px 20px", color: "var(--text)" }}>{r.lead_name || "—"}</td>
                     <td style={{ padding: "10px 12px", color: "var(--text-2)" }} className="num">{r.lead_phone}</td>
                     <td style={{ padding: "10px 12px", color: "var(--muted)" }}>{r.project || "—"}</td>
                     <td style={{ padding: "10px 12px" }}><StatusBadge status={r.status} /></td>
-                    <td style={{ padding: "10px 20px", color: r.last_error ? "var(--danger)" : "var(--muted)", fontSize: 12 }}>
-                      {r.last_error || r.outcome || (r.status === "dialing" ? "in progress…" : "")}
+                    <td style={{ padding: "10px 12px", color: "var(--muted)" }} className="num">
+                      {(r.attempts ?? 0) > 0 ? `${r.attempts}/${r.max_attempts ?? 1}` : "—"}
+                    </td>
+                    <td style={{ padding: "10px 20px", color: retryAt ? "var(--gold-2)" : r.last_error ? "var(--danger)" : "var(--muted)", fontSize: 12 }}>
+                      {retryAt
+                        ? `call back at ${retryAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                        : r.last_error || r.outcome || (r.status === "dialing" ? "in progress…" : "")}
                     </td>
                   </tr>
-                ))}
+                  );
+                })}
               </tbody>
             </table>
           </div>

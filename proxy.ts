@@ -39,6 +39,16 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
+  // The dialer tick must stay reachable by the Vercel cron (no cookie). Vercel
+  // sends `Authorization: Bearer ${CRON_SECRET}` when that env var is set.
+  if (pathname === "/api/voice/process") {
+    const cronSecret = process.env.CRON_SECRET ?? "";
+    const auth = req.headers.get("authorization") ?? "";
+    if (cronSecret && timingSafeEqual(auth, `Bearer ${cronSecret}`)) {
+      return NextResponse.next();
+    }
+  }
+
   const cookie = req.cookies.get(COOKIE)?.value ?? "";
   const ok = cookie.length > 0 && timingSafeEqual(cookie, await tokenFor(password));
   if (ok) return NextResponse.next();

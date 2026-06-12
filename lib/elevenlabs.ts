@@ -197,12 +197,18 @@ export async function placeOutboundCall(opts: {
   toNumber: string;
   dynamicVars?: Record<string, string>;
   firstMessageOverride?: string;
+  ringingTimeoutSecs?: number; // how long ElevenLabs lets it ring (their default: 60)
 }): Promise<OutboundResult> {
   const body: Record<string, unknown> = {
     agent_id: AGENT_ID,
     agent_phone_number_id: opts.agentPhoneNumberId,
     to_number: normalisePhone(opts.toNumber),
   };
+  if (opts.ringingTimeoutSecs && Number.isFinite(opts.ringingTimeoutSecs)) {
+    body.telephony_call_config = {
+      ringing_timeout_secs: Math.min(120, Math.max(10, Math.round(opts.ringingTimeoutSecs))),
+    };
+  }
   const vars = opts.dynamicVars
     ? Object.fromEntries(
         Object.entries(opts.dynamicVars).filter(([, v]) => v != null && v !== ""),

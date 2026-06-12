@@ -25,6 +25,13 @@ export async function POST(req: NextRequest) {
   if (!incoming.length)
     return NextResponse.json({ error: "no leads provided" }, { status: 400 });
 
+  // Same batch options as /api/voice/queue: parallel calls, ring timeout,
+  // and the no-pickup callback (re-dial every N minutes, up to max_attempts).
+  const concurrency: number = Math.min(10, Math.max(1, Number(body?.concurrency) || 1));
+  const ringingTimeoutSecs: number = Math.min(120, Math.max(10, Number(body?.ringing_timeout_secs) || 60));
+  const retryIntervalMinutes: number = Math.min(24 * 60, Math.max(5, Number(body?.retry_interval_minutes) || 120));
+  const maxAttempts: number = Math.min(10, Math.max(1, Number(body?.max_attempts) || 1));
+
   // Re-clean + de-dupe server-side (single source of truth).
   const seen = new Set<string>();
   const cleaned: { lead_name: string | null; lead_phone: string }[] = [];
@@ -46,7 +53,10 @@ export async function POST(req: NextRequest) {
       label: `${label} · ${cleaned.length}`,
       status: "running",
       agent_phone_number_id: agentPhoneNumberId,
-      concurrency: 1,
+      concurrency,
+      ringing_timeout_secs: ringingTimeoutSecs,
+      retry_interval_minutes: retryIntervalMinutes,
+      max_attempts: maxAttempts,
     })
     .select()
     .single();
@@ -57,6 +67,7 @@ export async function POST(req: NextRequest) {
     lead_name: c.lead_name,
     lead_phone: c.lead_phone,
     status: "queued",
+    max_attempts: maxAttempts,
   }));
   const { error: qErr } = await supabase.from("call_queue").insert(rows);
   if (qErr) {

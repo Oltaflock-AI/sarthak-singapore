@@ -13,12 +13,18 @@ interface BulkRow {
 
 // POST: create a campaign batch + enqueue rows. Does NOT dial — the processor
 // (browser loop or cron hitting /api/voice/process) picks them up.
+// Batch options: concurrency (parallel calls), ringing_timeout_secs (passed to
+// ElevenLabs telephony_call_config), retry_interval_minutes + max_attempts
+// (no-pickup callback: re-dial every N minutes until attempts run out).
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => null);
   const rows: BulkRow[] = Array.isArray(body?.rows) ? body.rows : [];
   const agentPhoneNumberId: string | undefined = body?.agent_phone_number_id;
   const label: string = body?.label || "Campaign";
-  const concurrency: number = Math.max(1, Number(body?.concurrency) || 1);
+  const concurrency: number = Math.min(10, Math.max(1, Number(body?.concurrency) || 1));
+  const ringingTimeoutSecs: number = Math.min(120, Math.max(10, Number(body?.ringing_timeout_secs) || 60));
+  const retryIntervalMinutes: number = Math.min(24 * 60, Math.max(5, Number(body?.retry_interval_minutes) || 120));
+  const maxAttempts: number = Math.min(10, Math.max(1, Number(body?.max_attempts) || 1));
 
   const clean = rows.filter((r) => r && typeof r.lead_phone === "string" && r.lead_phone.trim());
   if (!clean.length) return NextResponse.json({ error: "no valid rows" }, { status: 400 });
@@ -27,7 +33,15 @@ export async function POST(req: NextRequest) {
 
   const { data: batch, error: bErr } = await supabase
     .from("call_batches")
-    .insert({ label, status: "running", agent_phone_number_id: agentPhoneNumberId, concurrency })
+    .insert({
+      label,
+      status: "running",
+      agent_phone_number_id: agentPhoneNumberId,
+      concurrency,
+      ringing_timeout_secs: ringingTimeoutSecs,
+      retry_interval_minutes: retryIntervalMinutes,
+      max_attempts: maxAttempts,
+    })
     .select()
     .single();
   if (bErr) return NextResponse.json({ error: bErr.message }, { status: 500 });
@@ -39,6 +53,7 @@ export async function POST(req: NextRequest) {
     project: r.project ?? null,
     dynamic_vars: r.dynamic_vars ?? {},
     status: "queued",
+    max_attempts: maxAttempts,
   }));
   const { error: qErr } = await supabase.from("call_queue").insert(payload);
   if (qErr) return NextResponse.json({ error: qErr.message }, { status: 500 });
