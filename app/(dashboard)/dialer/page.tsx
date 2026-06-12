@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
-import { parseLeadsFile, type ParseResult } from "@/lib/parseLeads";
+import { parseLeadsFile, type ParseResult, type ParsedLead } from "@/lib/parseLeads";
 import type { LiveCallStatus, CallPhase } from "@/lib/elevenlabs";
 
 interface PhoneNumber {
@@ -224,7 +224,8 @@ function LiveCallCard({ call, onDismiss }: { call: ActiveCall; onDismiss: () => 
 
 // ── Bulk-import preview modal ───────────────────────────────────────────────
 // Shows the cleaned, deduped leads before any dialing starts so the operator
-// can sanity-check the parse (names stripped of "ji", "Unknown" → no-name).
+// can sanity-check the parse (names stripped of "ji", "Unknown" → no-name)
+// and untick anyone who shouldn't be called this round.
 function ImportPreview({
   preview, canStart, busy, onCancel, onStart,
 }: {
@@ -232,9 +233,23 @@ function ImportPreview({
   canStart: boolean;
   busy: boolean;
   onCancel: () => void;
-  onStart: () => void;
+  onStart: (selected: ParsedLead[]) => void;
 }) {
   const { leads, totalRows, noNameCount, duplicates, skipped, nameHeader, phoneHeader } = preview;
+
+  // Everyone starts ticked; the set tracks who was excluded.
+  const [excluded, setExcluded] = useState<Set<number>>(new Set());
+  const selectedCount = leads.length - excluded.size;
+  const toggle = (i: number) =>
+    setExcluded((prev) => {
+      const next = new Set(prev);
+      if (next.has(i)) next.delete(i);
+      else next.add(i);
+      return next;
+    });
+  const toggleAll = () =>
+    setExcluded((prev) => (prev.size ? new Set() : new Set(leads.map((_, i) => i))));
+
   const stat = (label: string, value: number | string, danger = false) => (
     <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
       <span className="num" style={{ fontSize: 18, fontWeight: 700, color: danger ? "var(--danger)" : "var(--text)" }}>{value}</span>
@@ -258,7 +273,7 @@ function ImportPreview({
         </div>
 
         <div className="panel-body" style={{ display: "flex", gap: 24, flexWrap: "wrap", borderBottom: "1px solid var(--line)" }}>
-          {stat("Will dial", leads.length)}
+          {stat("Will dial", selectedCount)}
           {stat("Rows read", totalRows)}
           {stat("No name → generic", noNameCount)}
           {duplicates > 0 && stat("Duplicates skipped", duplicates)}
@@ -274,15 +289,40 @@ function ImportPreview({
           <table style={{ width: "100%", borderCollapse: "collapse", fontSize: 13 }}>
             <thead>
               <tr style={{ color: "var(--muted)", fontSize: 11, textTransform: "uppercase", letterSpacing: 0.5, position: "sticky", top: 0, background: "var(--panel)" }}>
-                <th style={{ textAlign: "left", padding: "9px 20px" }}>#</th>
+                <th style={{ textAlign: "left", padding: "9px 20px", width: 36 }}>
+                  <input
+                    type="checkbox"
+                    checked={excluded.size === 0}
+                    onChange={toggleAll}
+                    title={excluded.size ? "Select all" : "Deselect all"}
+                    style={{ cursor: "pointer", accentColor: "var(--gold)" }}
+                  />
+                </th>
+                <th style={{ textAlign: "left", padding: "9px 12px" }}>#</th>
                 <th style={{ textAlign: "left", padding: "9px 12px" }}>Name</th>
                 <th style={{ textAlign: "left", padding: "9px 20px" }}>Phone</th>
               </tr>
             </thead>
             <tbody>
-              {leads.map((l, i) => (
-                <tr key={`${l.phone}-${i}`} style={{ borderTop: "1px solid var(--line)" }}>
-                  <td style={{ padding: "8px 20px", color: "var(--muted)" }} className="num">{i + 1}</td>
+              {leads.map((l, i) => {
+                const on = !excluded.has(i);
+                return (
+                <tr
+                  key={`${l.phone}-${i}`}
+                  onClick={() => toggle(i)}
+                  style={{ borderTop: "1px solid var(--line)", cursor: "pointer", opacity: on ? 1 : 0.45 }}
+                >
+                  <td style={{ padding: "8px 20px" }}>
+                    <input
+                      type="checkbox"
+                      checked={on}
+                      onChange={() => toggle(i)}
+                      onClick={(e) => e.stopPropagation()}
+                      aria-label={`Include ${l.name || l.phone}`}
+                      style={{ cursor: "pointer", accentColor: "var(--gold)" }}
+                    />
+                  </td>
+                  <td style={{ padding: "8px 12px", color: "var(--muted)" }} className="num">{i + 1}</td>
                   <td style={{ padding: "8px 12px", color: l.name ? "var(--text)" : "var(--muted)", fontStyle: l.name ? "normal" : "italic" }}>
                     {l.name || "no name → generic greeting"}
                     {l.name && l.rawName && l.rawName !== l.name && (
@@ -291,23 +331,24 @@ function ImportPreview({
                   </td>
                   <td style={{ padding: "8px 20px", color: "var(--text-2)" }} className="num">{l.phone}</td>
                 </tr>
-              ))}
+                );
+              })}
             </tbody>
           </table>
         </div>
 
         <div className="panel-body" style={{ borderTop: "1px solid var(--line)", display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap" }}>
           <span style={{ fontSize: 12, color: canStart ? "var(--muted)" : "var(--danger)" }}>
-            {canStart ? "Calls dial one at a time through the selected voice line." : "Select a voice line first (top of the page)."}
+            {canStart ? "Up to 3 calls dial at once through the selected voice line." : "Select a voice line first (top of the page)."}
           </span>
           <div style={{ display: "flex", gap: 10 }}>
             <button onClick={onCancel} style={{ ...btn(), padding: "9px 16px" }}>Cancel</button>
             <button
-              onClick={onStart}
-              disabled={!canStart || busy}
-              style={{ ...btn(true), padding: "9px 18px", opacity: !canStart || busy ? 0.5 : 1, cursor: !canStart || busy ? "default" : "pointer" }}
+              onClick={() => onStart(leads.filter((_, i) => !excluded.has(i)))}
+              disabled={!canStart || busy || selectedCount === 0}
+              style={{ ...btn(true), padding: "9px 18px", opacity: !canStart || busy || selectedCount === 0 ? 0.5 : 1, cursor: !canStart || busy || selectedCount === 0 ? "default" : "pointer" }}
             >
-              {busy ? "Starting…" : `Start ${leads.length} ${leads.length === 1 ? "call" : "calls"}`}
+              {busy ? "Starting…" : `Start ${selectedCount} ${selectedCount === 1 ? "call" : "calls"}`}
             </button>
           </div>
         </div>
@@ -348,7 +389,7 @@ export default function DialerPage() {
   // batch campaign form (options also apply to CSV/XLSX imports)
   const [cLabel, setCLabel] = useState("");
   const [cLeads, setCLeads] = useState("");
-  const [cConcurrency, setCConcurrency] = useState(1);
+  const [cConcurrency, setCConcurrency] = useState(3);
   const [cRingSecs, setCRingSecs] = useState(60);
   const [cRetry, setCRetry] = useState(true);
   const [cRetryHours, setCRetryHours] = useState(2);
@@ -489,8 +530,8 @@ export default function DialerPage() {
     }
   }
 
-  async function startBulk() {
-    if (!preview || !phoneId || bulkBusy) return;
+  async function startBulk(selected: ParsedLead[]) {
+    if (!selected.length || !phoneId || bulkBusy) return;
     setBulkBusy(true);
     try {
       const r = await fetch("/api/voice/bulk", {
@@ -499,7 +540,7 @@ export default function DialerPage() {
         body: JSON.stringify({
           agent_phone_number_id: phoneId,
           label: "Bulk import",
-          leads: preview.leads.map((l) => ({ name: l.name, phone: l.phone })),
+          leads: selected.map((l) => ({ name: l.name, phone: l.phone })),
           concurrency: cConcurrency,
           ringing_timeout_secs: cRingSecs,
           retry_interval_minutes: cRetry ? Math.round(cRetryHours * 60) : 120,
@@ -895,12 +936,12 @@ export default function DialerPage() {
           {/* options */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
-              Parallel calls
+              Parallel calls (max 3)
               <input
-                type="number" min={1} max={10}
+                type="number" min={1} max={3}
                 style={{ ...inputStyle, textTransform: "none", letterSpacing: 0 }}
                 value={cConcurrency}
-                onChange={(e) => setCConcurrency(Math.min(10, Math.max(1, Number(e.target.value) || 1)))}
+                onChange={(e) => setCConcurrency(Math.min(3, Math.max(1, Number(e.target.value) || 3)))}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>

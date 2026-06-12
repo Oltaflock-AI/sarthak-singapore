@@ -27,7 +27,7 @@ export async function POST(req: NextRequest) {
 
   // Same batch options as /api/voice/queue: parallel calls, ring timeout,
   // and the no-pickup callback (re-dial every N minutes, up to max_attempts).
-  const concurrency: number = Math.min(10, Math.max(1, Number(body?.concurrency) || 1));
+  const concurrency: number = Math.min(3, Math.max(1, Number(body?.concurrency) || 3));
   const ringingTimeoutSecs: number = Math.min(120, Math.max(10, Number(body?.ringing_timeout_secs) || 60));
   const retryIntervalMinutes: number = Math.min(24 * 60, Math.max(5, Number(body?.retry_interval_minutes) || 120));
   const maxAttempts: number = Math.min(10, Math.max(1, Number(body?.max_attempts) || 1));

@@ -19,6 +19,10 @@ import { cleanLeadName } from "@/lib/leadImport";
 
 const STALE_MIN = 6;
 
+// Hard ceiling on simultaneous calls across ALL batches — the voice line is
+// limited to 3 concurrent calls for now. Per-batch concurrency caps under this.
+const MAX_GLOBAL_CONCURRENCY = 3;
+
 // `calls.outcome` values that mean the lead never picked up. The webhook's
 // call_initiation_failure handler writes the ElevenLabs failure_reason
 // verbatim (busy | no-answer | unknown), defaulting to "failed".
@@ -156,13 +160,22 @@ async function dialNext(
   const dialed: { queue_id: string; conversation_id: string | null }[] = [];
   const nowIso = new Date().toISOString();
 
+  // Global ceiling first — count every in-flight call regardless of batch.
+  const { count: globalActive } = await supabase
+    .from("call_queue")
+    .select("id", { count: "exact", head: true })
+    .eq("status", "dialing");
+  let globalFree = MAX_GLOBAL_CONCURRENCY - (globalActive ?? 0);
+  if (globalFree <= 0) return [];
+
   for (const batch of batches) {
+    if (globalFree <= 0) break;
     const { count: activeCount } = await supabase
       .from("call_queue")
       .select("id", { count: "exact", head: true })
       .eq("batch_id", batch.id)
       .eq("status", "dialing");
-    let free = (batch.concurrency ?? 1) - (activeCount ?? 0);
+    let free = Math.min((batch.concurrency ?? 1) - (activeCount ?? 0), globalFree);
 
     while (free > 0) {
       const { data: next } = await supabase
@@ -221,6 +234,7 @@ async function dialNext(
           .eq("id", next.id);
         dialed.push({ queue_id: next.id, conversation_id: r.conversation_id });
         free--;
+        globalFree--;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
         const attempts = (next.attempts ?? 0) + 1;
