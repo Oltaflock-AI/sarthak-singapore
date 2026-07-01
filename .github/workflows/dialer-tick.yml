@@ -1,0 +1,41 @@
+name: Dialer tick
+
+# Drives the outbound dialer queue on a schedule: reconcile finished calls,
+# dial the next queued lead (concurrency-aware), and fire the 2-hour no-pickup
+# callbacks — so the queue keeps moving with the dashboard closed.
+#
+# Why this and not a Vercel cron: the project is on the Vercel Hobby plan, which
+# rejects any cron more frequent than once per day at deploy time. This external
+# scheduler replaces the */10 cron that used to live in vercel.json.
+#
+# The endpoint is gated by CRON_SECRET (see proxy.ts): requests are let through
+# only when they carry `Authorization: Bearer <CRON_SECRET>`.
+#
+# One-time setup in GitHub → repo Settings:
+#   • Secrets → Actions → CRON_SECRET   = same value set in Vercel env
+#   • Variables → Actions → APP_URL     = https://<production-domain>  (no trailing slash)
+
+on:
+  schedule:
+    - cron: "*/10 * * * *" # every 10 min (GitHub may delay a few min under load)
+  workflow_dispatch: {} # allow manual runs from the Actions tab
+
+# If a tick overruns, don't pile up concurrent runs.
+concurrency:
+  group: dialer-tick
+  cancel-in-progress: false
+
+jobs:
+  tick:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Verify config
+        run: |
+          test -n "${{ secrets.CRON_SECRET }}" || { echo "::error::CRON_SECRET secret is not set"; exit 1; }
+          test -n "${{ vars.APP_URL }}"        || { echo "::error::APP_URL variable is not set"; exit 1; }
+
+      - name: Hit dialer tick endpoint
+        run: |
+          curl -fsS --max-time 60 \
+            -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
+            "${{ vars.APP_URL }}/api/voice/process"
