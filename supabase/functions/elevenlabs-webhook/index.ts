@@ -146,6 +146,79 @@ function collected(dcr: Record<string, unknown>, keys: string[]): unknown {
   return null;
 }
 
+// Did the agent hand this call to a human? True when the transfer_to_number
+// system tool fired (same tool-result scan as bookingFromTranscript) or the
+// call terminated via transfer.
+function transferredFromTranscript(raw: unknown, terminationReason = ""): boolean {
+  if (/transfer/i.test(terminationReason)) return true;
+  if (!Array.isArray(raw)) return false;
+  for (const turn of raw as Array<Record<string, unknown>>) {
+    const results = turn?.tool_results;
+    for (const r of (Array.isArray(results) ? results : []) as Array<Record<string, unknown>>) {
+      if (String(r?.tool_name ?? "").toLowerCase().includes("transfer") && !r?.is_error) return true;
+    }
+  }
+  return false;
+}
+
+// Best-effort "why" for the handoff brief, from the caller's own words.
+function transferReason(transcript: TranscriptTurn[]): string {
+  let said = transcript
+    .filter((t) => /user|caller|customer|lead|human/i.test(`${t.speaker} ${t.side}`))
+    .map((t) => t.text.toLowerCase()).join(" ");
+  if (!said.trim()) said = transcript.map((t) => t.text.toLowerCase()).join(" ");
+  const price = /price|rate|cost|budget|lakh|crore|प्राइस|रेट|कीमत|दाम|बजट|कितने|कितना/.test(said);
+  const timeline = /possession|timeline|ready|complete|पजेशन|तैयार|रेडी|कब तक|कब बन/.test(said);
+  if (price && timeline) return "Pricing & possession timeline";
+  if (price) return "Pricing / rate";
+  if (timeline) return "Possession / timeline";
+  return "Wants to speak with the team";
+}
+
+// Send the sales team a WhatsApp brief via Interakt (their WhatsApp BSP), using
+// the approved lead_transfer_alert template (6 body vars: name, phone, project,
+// reason, budget, timeline). Recipient by project — one manager per project as
+// they grow. Non-fatal: a WhatsApp failure must never break call recording.
+async function sendInteraktHandoff(p: {
+  name: string; phone: string; project: string; reason: string; budget: string; timeline: string;
+}): Promise<void> {
+  const key = Deno.env.get("INTERAKT_API_KEY");
+  const byProject: Record<string, string | undefined> = {
+    "Singapore Miracle": Deno.env.get("WHATSAPP_HANDOFF_MIRACLE"),
+  };
+  const to = byProject[p.project] ?? Deno.env.get("WHATSAPP_HANDOFF_DEFAULT");
+  if (!key || !to) {
+    console.warn("[handoff] missing INTERAKT_API_KEY or recipient — skipping WhatsApp");
+    return;
+  }
+  const dash = (v: string) => (v && v.trim() ? v.trim() : "—");
+  const payload = {
+    countryCode: "+91",
+    phoneNumber: to.replace(/\D/g, "").slice(-10),
+    type: "Template",
+    template: {
+      name: Deno.env.get("WHATSAPP_HANDOFF_TEMPLATE") ?? "lead_transfer_alert",
+      languageCode: "en",
+      bodyValues: [dash(p.name), dash(p.phone), dash(p.project), dash(p.reason), dash(p.budget), dash(p.timeline)],
+    },
+  };
+  try {
+    const res = await fetch("https://api.interakt.ai/v1/public/message/", {
+      method: "POST",
+      headers: { Authorization: `Basic ${key}`, "Content-Type": "application/json" },
+      body: JSON.stringify(payload),
+    });
+    const j = await res.json().catch(() => ({}));
+    if (!res.ok || j?.result === false) {
+      console.error("[handoff] Interakt send failed", res.status, JSON.stringify(j).slice(0, 300));
+    } else {
+      console.log("[handoff] Interakt sent to", payload.phoneNumber, JSON.stringify(j).slice(0, 200));
+    }
+  } catch (e) {
+    console.error("[handoff] Interakt error", String(e));
+  }
+}
+
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Headers": "authorization, x-client-info, apikey, content-type, elevenlabs-signature",
@@ -344,6 +417,19 @@ Deno.serve(async (req) => {
     lead_score = Math.max(0, Math.min(100, s));
   }
 
+  // Handoff: did the agent transfer the call to a human? Idempotent — a webhook
+  // retry must not re-send the WhatsApp, so we flag it on the calls row.
+  const transferred = transferredFromTranscript(
+    pick(data, ["transcript"]),
+    String(pick(metadata, ["termination_reason"]) ?? ""),
+  );
+  const { data: priorCall } = transferred
+    ? await supabase.from("calls").select("analysis").eq("call_id", call_id).maybeSingle()
+    : { data: null };
+  const alreadyHandedOff = Boolean(
+    (priorCall?.analysis as Record<string, unknown> | undefined)?.handoff_sent,
+  );
+
   const analysis: Record<string, unknown> = {
     call_successful,
     evaluation_criteria_results: Object.keys(evals).length ? evals : undefined,
@@ -351,6 +437,7 @@ Deno.serve(async (req) => {
     direction,
     agent_id: pick(data, ["agent_id"]),
     termination_reason: pick(metadata, ["termination_reason"]) || undefined,
+    handoff_sent: transferred || undefined,
   };
 
   const row: Record<string, unknown> = { call_id, source: "elevenlabs" };
@@ -376,6 +463,18 @@ Deno.serve(async (req) => {
   if (error) {
     console.error("[elevenlabs-webhook] supabase error", error, "row=", row);
     return json({ ok: false, error: error.message }, 500);
+  }
+
+  // ── WhatsApp handoff brief to the sales team, only on a real transfer ──
+  if (transferred && !alreadyHandedOff) {
+    await sendInteraktHandoff({
+      name: String(lead_name ?? ""),
+      phone: String(lead_phone ?? ""),
+      project,
+      reason: transferReason(transcript),
+      budget: String(budget ?? ""),
+      timeline: String(timeline ?? ""),
+    });
   }
 
   // ── Mirror into leads CRM (canonical +E.164, dedupes legacy unprefixed) ──
