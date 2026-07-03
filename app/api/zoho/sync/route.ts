@@ -125,11 +125,21 @@ async function sync(agentPhoneNumberId: string | undefined) {
   });
 }
 
+// Surface the real cause instead of a bare 500 (missing env var, Zoho/Supabase error).
+async function run(agentPhoneNumberId: string | undefined) {
+  try {
+    return await sync(agentPhoneNumberId);
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e);
+    return NextResponse.json({ ok: false, error: msg }, { status: 500 });
+  }
+}
+
 export async function POST(req: NextRequest) {
   const body = await req.json().catch(() => ({}));
-  return sync(body?.agent_phone_number_id);
+  return run(body?.agent_phone_number_id);
 }
 
 export async function GET(req: NextRequest) {
-  return sync(req.nextUrl.searchParams.get("agent_phone_number_id") || undefined);
+  return run(req.nextUrl.searchParams.get("agent_phone_number_id") || undefined);
 }
