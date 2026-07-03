@@ -3,7 +3,10 @@ import { processTick } from "@/lib/dialer";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// ElevenLabs' sip-trunk/outbound-call blocks until the call resolves — a
+// no-answer rings the full ringing_timeout_secs. Dialing up to `concurrency`
+// leads sequentially can take a few minutes, so allow well past the old 60s.
+export const maxDuration = 300;
 
 // One dialer tick: reconcile finished calls, then dial the next queued lead
 // (concurrency-aware). Called repeatedly by the browser loop AND safe for a
