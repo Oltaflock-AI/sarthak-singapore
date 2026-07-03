@@ -419,7 +419,12 @@ Deno.serve(async (req) => {
 
   // Handoff: did the agent transfer the call to a human? Idempotent — a webhook
   // retry must not re-send the WhatsApp, so we flag it on the calls row.
-  const transferred = transferredFromTranscript(
+  // Primary signal is ElevenLabs' own features_usage.transfer_to_number.used
+  // (authoritative — the transcript may narrate a transfer that never executed);
+  // the tool-result / termination scan is a fallback.
+  const featuresUsage = (pick<Record<string, unknown>>(metadata, ["features_usage"]) ?? {}) as Record<string, unknown>;
+  const transferUsed = (featuresUsage.transfer_to_number as Record<string, unknown> | undefined)?.used === true;
+  const transferred = transferUsed || transferredFromTranscript(
     pick(data, ["transcript"]),
     String(pick(metadata, ["termination_reason"]) ?? ""),
   );
