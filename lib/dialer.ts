@@ -28,6 +28,16 @@ const MAX_GLOBAL_CONCURRENCY = 3;
 // verbatim (busy | no-answer | unknown), defaulting to "failed".
 const NO_PICKUP = new Set(["busy", "no-answer", "no_answer", "unknown", "failed", "voicemail"]);
 
+// Only place calls during business hours in India (IST = UTC+5:30). Outside the
+// window the tick still reconciles/reschedules — it just doesn't dial, so no
+// lead is ever rung in the middle of the night. Cron runs 24/7; this is the gate.
+const CALL_WINDOW_START_MIN = 10 * 60; // 10:00 IST
+const CALL_WINDOW_END_MIN = 20 * 60; //   20:00 IST
+export function withinCallWindowIST(now: Date = new Date()): boolean {
+  const istMin = (now.getUTCHours() * 60 + now.getUTCMinutes() + 330) % 1440;
+  return istMin >= CALL_WINDOW_START_MIN && istMin < CALL_WINDOW_END_MIN;
+}
+
 interface BatchRow {
   id: string;
   status: string;
@@ -189,6 +199,7 @@ async function reconcile(
 async function dialNext(
   batchId?: string,
 ): Promise<{ queue_id: string; conversation_id: string | null }[]> {
+  if (!withinCallWindowIST()) return []; // no calls outside 10:00–20:00 IST
   const batches = await loadBatches(batchId);
   if (!batches.length) return [];
 
