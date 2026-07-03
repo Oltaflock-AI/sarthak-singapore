@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { getMiracleNoAnswerLeads } from "@/lib/zoho";
 import { cleanLeadName, cleanPhone, phoneKey } from "@/lib/leadImport";
+import { listPhoneNumbers, AGENT_ID } from "@/lib/elevenlabs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -19,12 +20,24 @@ const RETRY_DAYS = [1, 3, 5, 7, 15, 30];
 // everything already in call_queue). Read-only on Zoho — no write-back.
 //
 // Auth: dashboard cookie, or the CRON_SECRET bearer (proxy allows this path).
-// agent_phone_number_id comes from the body or ZOHO_SYNC_AGENT_PHONE_NUMBER_ID.
+//
+// The voice line: headless cron calls have no browser selection, so we resolve
+// it as explicit request value → ZOHO_SYNC_AGENT_PHONE_NUMBER_ID override →
+// auto-discover the number assigned to the Sarthak agent (same source the
+// dashboard picker uses). So no config is needed when one line is linked.
+async function resolveAgentPhone(explicit?: string): Promise<string | null> {
+  if (explicit) return explicit;
+  if (process.env.ZOHO_SYNC_AGENT_PHONE_NUMBER_ID) return process.env.ZOHO_SYNC_AGENT_PHONE_NUMBER_ID;
+  const numbers = await listPhoneNumbers().catch(() => []);
+  const match = numbers.find((n) => n.assigned_agent?.agent_id === AGENT_ID);
+  return (match ?? numbers[0])?.phone_number_id ?? null;
+}
+
 async function sync(agentPhoneNumberId: string | undefined) {
-  const agentPhone = agentPhoneNumberId || process.env.ZOHO_SYNC_AGENT_PHONE_NUMBER_ID;
+  const agentPhone = await resolveAgentPhone(agentPhoneNumberId);
   if (!agentPhone) {
     return NextResponse.json(
-      { error: "agent_phone_number_id required (body or ZOHO_SYNC_AGENT_PHONE_NUMBER_ID)" },
+      { error: "no voice line found — assign a phone number to the agent in ElevenLabs" },
       { status: 400 },
     );
   }
