@@ -36,6 +36,9 @@ jobs:
 
       - name: Hit dialer tick endpoint
         run: |
-          curl -fsS --max-time 60 \
+          # Unanswered SIP calls block until ring-out, so a tick can run ~90s+.
+          # Must exceed that (and match the route's maxDuration) or curl aborts
+          # mid-tick and Vercel may cancel the function partway.
+          curl -fsS --max-time 290 \
             -H "Authorization: Bearer ${{ secrets.CRON_SECRET }}" \
             "${{ vars.APP_URL }}/api/voice/process"
