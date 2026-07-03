@@ -100,6 +100,14 @@ function mmss(secs: number): string {
   return `${m}:${(s % 60).toString().padStart(2, "0")}`;
 }
 
+// A scheduled callback: time-only if it's today, else "Jul 5, 2:00 PM" — so the
+// multi-day cadence (day 1,3,5,7,15,30) reads clearly in the queue.
+function fmtWhen(d: Date): string {
+  const time = d.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
+  if (d.toDateString() === new Date().toDateString()) return time;
+  return `${d.toLocaleDateString([], { month: "short", day: "numeric" })}, ${time}`;
+}
+
 // Visual treatment per live-call phase.
 const PHASE_META: Record<CallPhase, { label: string; color: string; soft: string }> = {
   ringing: { label: "Ringing…", color: "var(--gold)", soft: "var(--gold-soft-2)" },
@@ -1040,7 +1048,7 @@ export default function DialerPage() {
                     </td>
                     <td style={{ padding: "10px 20px", color: retryAt ? "var(--gold-2)" : r.last_error ? "var(--danger)" : "var(--muted)", fontSize: 12 }}>
                       {retryAt
-                        ? `call back at ${retryAt.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`
+                        ? `next call ${fmtWhen(retryAt)}`
                         : r.last_error || r.outcome || (r.status === "dialing" ? "in progress…" : "")}
                     </td>
                   </tr>

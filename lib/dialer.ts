@@ -36,6 +36,7 @@ interface BatchRow {
   ringing_timeout_secs: number | null;
   retry_interval_minutes: number | null;
   max_attempts: number | null;
+  retry_days: number[] | null; // e.g. [1,3,5,7,15,30] → multi-day cadence
 }
 
 export interface TickResult {
@@ -60,7 +61,41 @@ async function settleNoPickup(
   batch: BatchRow | undefined,
   outcome: string,
 ): Promise<"rescheduled" | "failed"> {
-  const attempts = row.attempts ?? 0;
+  const attempts = row.attempts ?? 0; // dials already made (>=1 here)
+  const days = Array.isArray(batch?.retry_days) ? batch.retry_days : null;
+
+  // Multi-day cadence (e.g. [1,3,5,7,15,30]): attempt N lands on day retry_days[N-1]
+  // from the first call. After retry_days.length attempts, stop calling.
+  if (days && days.length) {
+    if (attempts < days.length) {
+      const gapDays = Math.max(0, (days[attempts] ?? 0) - (days[attempts - 1] ?? 0));
+      await supabase
+        .from("call_queue")
+        .update({
+          status: "queued",
+          outcome,
+          next_attempt_at: new Date(Date.now() + gapDays * 86_400_000).toISOString(),
+          last_error: `${outcome} — callback ${attempts + 1}/${days.length} in ${gapDays}d`,
+          conversation_id: null,
+          sip_call_id: null,
+          completed_at: null,
+        })
+        .eq("id", row.id);
+      return "rescheduled";
+    }
+    await supabase
+      .from("call_queue")
+      .update({
+        status: "failed",
+        outcome,
+        last_error: `${outcome} — stopped after ${attempts} attempts over ${days[days.length - 1]} days`,
+        completed_at: new Date().toISOString(),
+      })
+      .eq("id", row.id);
+    return "failed";
+  }
+
+  // Flat interval fallback: call back every retry_interval_minutes up to max_attempts.
   const maxAttempts = row.max_attempts ?? 1;
   if (attempts < maxAttempts) {
     const minutes = batch?.retry_interval_minutes ?? 120;

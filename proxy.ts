@@ -39,9 +39,9 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // The dialer tick must stay reachable by the Vercel cron (no cookie). Vercel
-  // sends `Authorization: Bearer ${CRON_SECRET}` when that env var is set.
-  if (pathname === "/api/voice/process") {
+  // Scheduled jobs (dialer tick + Zoho lead sync) must stay reachable by the
+  // cron with no cookie — it sends `Authorization: Bearer ${CRON_SECRET}`.
+  if (pathname === "/api/voice/process" || pathname === "/api/zoho/sync") {
     const cronSecret = process.env.CRON_SECRET ?? "";
     const auth = req.headers.get("authorization") ?? "";
     if (cronSecret && timingSafeEqual(auth, `Bearer ${cronSecret}`)) {
