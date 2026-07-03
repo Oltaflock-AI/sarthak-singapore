@@ -5,7 +5,8 @@ import { cleanLeadName, cleanPhone, phoneKey } from "@/lib/leadImport";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
-export const maxDuration = 60;
+// A full 30k-lead scan is ~150 sequential Zoho calls, which can exceed 60s.
+export const maxDuration = 300;
 
 const BATCH_LABEL = "Singapore Miracle — Not Answer";
 
