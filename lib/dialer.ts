@@ -19,9 +19,13 @@ import { cleanLeadName } from "@/lib/leadImport";
 
 const STALE_MIN = 6;
 
-// Hard ceiling on simultaneous calls across ALL batches — the voice line is
-// limited to 3 concurrent calls for now. Per-batch concurrency caps under this.
-const MAX_GLOBAL_CONCURRENCY = 3;
+// Hard ceiling on simultaneous outbound calls across ALL batches. The VoBiz
+// trunk allows only 3 concurrent channels, and a warm transfer consumes an
+// extra channel (प्रिया dials the salesman while the caller holds). Running at
+// 3 saturates the trunk → VoBiz rejects new calls AND transfer legs can't get a
+// channel (the transfer loops). Cap at 2 to keep 1 channel free for transfers.
+// Bump this up only if the VoBiz concurrency limit is raised.
+const MAX_GLOBAL_CONCURRENCY = 2;
 
 // `calls.outcome` values that mean the lead never picked up. The webhook's
 // call_initiation_failure handler writes the ElevenLabs failure_reason
