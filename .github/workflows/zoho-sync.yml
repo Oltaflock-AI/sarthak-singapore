@@ -19,8 +19,9 @@ name: Zoho lead sync
 #   Variables: APP_URL     = https://sarthak-singapore.vercel.app
 
 on:
-  schedule:
-    - cron: "0 */6 * * *" # every 6 hours
+  # PAUSED 2026-07-04 — ElevenLabs out of credits. Re-enable when the new account is live.
+  # schedule:
+  #   - cron: "0 */6 * * *" # every 6 hours
   workflow_dispatch: {} # manual trigger — use this for the first backfill
 
 concurrency:

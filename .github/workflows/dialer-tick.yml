@@ -16,8 +16,10 @@ name: Dialer tick
 #   • Variables → Actions → APP_URL     = https://<production-domain>  (no trailing slash)
 
 on:
-  schedule:
-    - cron: "*/10 * * * *" # every 10 min (GitHub may delay a few min under load)
+  # PAUSED 2026-07-04 — ElevenLabs out of credits. Re-enable this schedule once
+  # the new ElevenLabs account is connected and verified.
+  # schedule:
+  #   - cron: "*/10 * * * *" # every 10 min (GitHub may delay a few min under load)
   workflow_dispatch: {} # allow manual runs from the Actions tab
 
 # If a tick overruns, don't pile up concurrent runs.
