@@ -91,8 +91,8 @@ async function sync(agentPhoneNumberId: string | undefined) {
         label: BATCH_LABEL,
         status: "running",
         agent_phone_number_id: agentPhone,
-        concurrency: 3,
-        ringing_timeout_secs: 60,
+        concurrency: 2, // ≤ VoBiz 3-channel limit; leaves one channel for transfers
+        ringing_timeout_secs: 30,
         // No-pickup cadence: call on day 1, then 3, 5, 7, 15, 30 — then stop.
         retry_days: RETRY_DAYS,
         max_attempts: RETRY_DAYS.length,
