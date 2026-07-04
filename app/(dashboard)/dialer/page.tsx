@@ -397,7 +397,7 @@ export default function DialerPage() {
   // batch campaign form (options also apply to CSV/XLSX imports)
   const [cLabel, setCLabel] = useState("");
   const [cLeads, setCLeads] = useState("");
-  const [cConcurrency, setCConcurrency] = useState(3);
+  const [cConcurrency, setCConcurrency] = useState(2);
   const [cRingSecs, setCRingSecs] = useState(60);
   const [cRetry, setCRetry] = useState(true);
   const [cRetryHours, setCRetryHours] = useState(2);
@@ -944,12 +944,12 @@ export default function DialerPage() {
           {/* options */}
           <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(150px, 1fr))", gap: 12 }}>
             <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
-              Parallel calls (max 3)
+              Parallel calls (max 2)
               <input
-                type="number" min={1} max={3}
+                type="number" min={1} max={2}
                 style={{ ...inputStyle, textTransform: "none", letterSpacing: 0 }}
                 value={cConcurrency}
-                onChange={(e) => setCConcurrency(Math.min(3, Math.max(1, Number(e.target.value) || 3)))}
+                onChange={(e) => setCConcurrency(Math.min(2, Math.max(1, Number(e.target.value) || 2)))}
               />
             </label>
             <label style={{ display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
