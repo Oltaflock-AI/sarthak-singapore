@@ -5,8 +5,10 @@
 const API_BASE = "https://api.elevenlabs.io/v1/convai";
 
 // Known agent (overridable via env). See CLAUDE.md / deploy doc.
+// 2026-07: migrated to a new ElevenLabs account — agent "Sarthak Miracle".
+// (Old account's agent was agent_7701kt6yb510f5hrpm1tsmjx61w4.)
 export const AGENT_ID =
-  process.env.ELEVENLABS_AGENT_ID || "agent_7701kt6yb510f5hrpm1tsmjx61w4";
+  process.env.ELEVENLABS_AGENT_ID || "agent_6801kwrchx5yfnha0jechj2t67pm";
 
 function apiKey(): string {
   const k = process.env.ELEVENLABS_API_KEY;

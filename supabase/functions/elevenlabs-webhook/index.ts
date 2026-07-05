@@ -135,9 +135,9 @@ function bookingFromTranscript(
 // data_collection_results entries are { value, rationale, ... }. Unwrap the value.
 function collected(dcr: Record<string, unknown>, keys: string[]): unknown {
   for (const k of keys) {
-    const entry = dcr[k] as Record<string, unknown> | undefined;
+    const entry: unknown = dcr[k];
     if (entry && typeof entry === "object" && "value" in entry) {
-      const v = entry.value;
+      const v = (entry as Record<string, unknown>).value;
       if (v !== undefined && v !== null && v !== "") return v;
     } else if (entry !== undefined && entry !== null && entry !== "") {
       return entry; // already a scalar
@@ -175,32 +175,49 @@ function transferReason(transcript: TranscriptTurn[]): string {
   return "Wants to speak with the team";
 }
 
-// Send the sales team a WhatsApp brief via Interakt (their WhatsApp BSP), using
-// the approved lead_transfer_alert template (6 body vars: name, phone, project,
-// reason, budget, timeline). Recipient by project — one manager per project as
-// they grow. Non-fatal: a WhatsApp failure must never break call recording.
-async function sendInteraktHandoff(p: {
-  name: string; phone: string; project: string; reason: string; budget: string; timeline: string;
-}): Promise<void> {
+const dash = (v: string) => (v && v.trim() ? v.trim() : "—");
+
+// Display an Indian number as +91XXXXXXXXXX (last 10 digits), or "—" if empty.
+function dispPhone(raw: string): string {
+  const d = (raw || "").replace(/\D/g, "");
+  return d ? "+91" + d.slice(-10) : "—";
+}
+
+// Format a UTC ISO instant as a readable IST string, e.g. "Sun, 12 Jul 2026, 4:30 PM IST".
+function formatWhenIST(iso: string | null): string {
+  if (!iso) return "";
+  const ms = Date.parse(iso);
+  if (!Number.isFinite(ms)) return "";
+  const d = new Date(ms + 330 * 60_000); // shift to IST, then read UTC fields
+  const days = ["Sun", "Mon", "Tue", "Wed", "Thu", "Fri", "Sat"];
+  const months = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+  let h = d.getUTCHours();
+  const ampm = h >= 12 ? "PM" : "AM";
+  h = h % 12 || 12;
+  const mm = d.getUTCMinutes().toString().padStart(2, "0");
+  return `${days[d.getUTCDay()]}, ${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${h}:${mm} ${ampm} IST`;
+}
+
+// Low-level Interakt (WhatsApp BSP) template send. Recipient is normalised to a
+// 10-digit +91 number. Non-fatal: a WhatsApp failure must never break call
+// recording, so this only logs on error. `tag` labels the log line.
+async function sendInteraktMessage(
+  to: string,
+  templateName: string,
+  bodyValues: string[],
+  tag = "whatsapp",
+): Promise<void> {
   const key = Deno.env.get("INTERAKT_API_KEY");
-  const byProject: Record<string, string | undefined> = {
-    "Singapore Miracle": Deno.env.get("WHATSAPP_HANDOFF_MIRACLE"),
-  };
-  const to = byProject[p.project] ?? Deno.env.get("WHATSAPP_HANDOFF_DEFAULT");
-  if (!key || !to) {
-    console.warn("[handoff] missing INTERAKT_API_KEY or recipient — skipping WhatsApp");
+  const num = (to || "").replace(/\D/g, "").slice(-10);
+  if (!key || num.length !== 10) {
+    console.warn(`[${tag}] missing INTERAKT_API_KEY or valid recipient — skipping WhatsApp`);
     return;
   }
-  const dash = (v: string) => (v && v.trim() ? v.trim() : "—");
   const payload = {
     countryCode: "+91",
-    phoneNumber: to.replace(/\D/g, "").slice(-10),
+    phoneNumber: num,
     type: "Template",
-    template: {
-      name: Deno.env.get("WHATSAPP_HANDOFF_TEMPLATE") ?? "lead_transfer_alert",
-      languageCode: "en",
-      bodyValues: [dash(p.name), dash(p.phone), dash(p.project), dash(p.reason), dash(p.budget), dash(p.timeline)],
-    },
+    template: { name: templateName, languageCode: "en", bodyValues },
   };
   try {
     const res = await fetch("https://api.interakt.ai/v1/public/message/", {
@@ -210,13 +227,70 @@ async function sendInteraktHandoff(p: {
     });
     const j = await res.json().catch(() => ({}));
     if (!res.ok || j?.result === false) {
-      console.error("[handoff] Interakt send failed", res.status, JSON.stringify(j).slice(0, 300));
+      console.error(`[${tag}] Interakt send failed`, res.status, JSON.stringify(j).slice(0, 300));
     } else {
-      console.log("[handoff] Interakt sent to", payload.phoneNumber, JSON.stringify(j).slice(0, 200));
+      console.log(`[${tag}] Interakt sent to`, num, JSON.stringify(j).slice(0, 200));
     }
   } catch (e) {
-    console.error("[handoff] Interakt error", String(e));
+    console.error(`[${tag}] Interakt error`, String(e));
   }
+}
+
+// Send the sales team a WhatsApp brief via Interakt, using the approved
+// lead_transfer_alert template (6 body vars: name, phone, project, reason,
+// budget, timeline). Recipient by project — one manager per project as they grow.
+async function sendInteraktHandoff(p: {
+  name: string; phone: string; project: string; reason: string; budget: string; timeline: string;
+}): Promise<void> {
+  const byProject: Record<string, string | undefined> = {
+    "Singapore Miracle": Deno.env.get("WHATSAPP_HANDOFF_MIRACLE"),
+  };
+  const to = byProject[p.project] ?? Deno.env.get("WHATSAPP_HANDOFF_DEFAULT") ?? "";
+  await sendInteraktMessage(
+    to,
+    Deno.env.get("WHATSAPP_HANDOFF_TEMPLATE") ?? "lead_transfer_alert",
+    [dash(p.name), dash(p.phone), dash(p.project), dash(p.reason), dash(p.budget), dash(p.timeline)],
+    "handoff",
+  );
+}
+
+// On a CONFIRMED site-visit booking (real cal.com uid), WhatsApp BOTH parties,
+// each with its own approved template:
+//   • sales team → ai_ssg_site_visit_booked      (Lead, Phone, Project, When, Status)
+//   • the client → aiclient_ssg_sitevisit_booked (Name, Project, When, Member, Contact)
+// The client is messaged on their own lead phone; the sales recipient and the
+// "team member" name/contact shown to the client come from env (falling back to
+// the existing handoff number). Non-fatal.
+async function sendSiteVisitWhatsApps(p: {
+  name: string; phone: string; project: string; whenText: string;
+}): Promise<void> {
+  const salesTo =
+    Deno.env.get("WHATSAPP_SITEVISIT_SALES") ??
+    Deno.env.get("WHATSAPP_HANDOFF_MIRACLE") ??
+    Deno.env.get("WHATSAPP_HANDOFF_DEFAULT") ??
+    "";
+  const memberName = Deno.env.get("SITEVISIT_SALES_NAME") ?? "Sarthak Singapore team";
+  const memberContact =
+    Deno.env.get("SITEVISIT_SALES_CONTACT") ??
+    Deno.env.get("WHATSAPP_SITEVISIT_SALES") ??
+    Deno.env.get("WHATSAPP_HANDOFF_MIRACLE") ??
+    "";
+
+  // 1) Sales team notification.
+  await sendInteraktMessage(
+    salesTo,
+    Deno.env.get("WHATSAPP_SITEVISIT_SALES_TEMPLATE") ?? "ai_ssg_site_visit_booked",
+    [dash(p.name), dispPhone(p.phone), dash(p.project), dash(p.whenText), "Confirmed"],
+    "sitevisit-sales",
+  );
+
+  // 2) Client confirmation (to the lead's own number).
+  await sendInteraktMessage(
+    p.phone,
+    Deno.env.get("WHATSAPP_SITEVISIT_CLIENT_TEMPLATE") ?? "aiclient_ssg_sitevisit_booked",
+    [dash(p.name), dash(p.project), dash(p.whenText), dash(memberName), dispPhone(memberContact)],
+    "sitevisit-client",
+  );
 }
 
 const corsHeaders = {
@@ -264,8 +338,9 @@ Deno.serve(async (req) => {
   // ElevenLabs workspace share this workspace-level post-call webhook, but their
   // calls must not pollute the Sarthak dashboard. ElevenLabs has no per-agent
   // webhook off switch (a null agent override = inherit workspace), so filter here.
+  // 2026-07: new ElevenLabs account, agent "Sarthak Miracle". Old: agent_7701kt6yb510f5hrpm1tsmjx61w4.
   const SARTHAK_AGENT_ID =
-    Deno.env.get("ELEVENLABS_AGENT_ID") ?? "agent_7701kt6yb510f5hrpm1tsmjx61w4";
+    Deno.env.get("ELEVENLABS_AGENT_ID") ?? "agent_6801kwrchx5yfnha0jechj2t67pm";
   const incomingAgentId = pick<string>(data, ["agent_id"]);
   if (incomingAgentId && incomingAgentId !== SARTHAK_AGENT_ID) {
     return json({ ok: true, ignored: "other agent", agent_id: incomingAgentId });
@@ -428,12 +503,14 @@ Deno.serve(async (req) => {
     pick(data, ["transcript"]),
     String(pick(metadata, ["termination_reason"]) ?? ""),
   );
-  const { data: priorCall } = transferred
+  // Idempotency: a webhook retry must not re-send WhatsApp. We flag both the
+  // transfer handoff and the site-visit notify on the calls row's analysis.
+  const { data: priorCall } = (transferred || siteVisit)
     ? await supabase.from("calls").select("analysis").eq("call_id", call_id).maybeSingle()
     : { data: null };
-  const alreadyHandedOff = Boolean(
-    (priorCall?.analysis as Record<string, unknown> | undefined)?.handoff_sent,
-  );
+  const priorAnalysis = (priorCall?.analysis as Record<string, unknown> | undefined) ?? {};
+  const alreadyHandedOff = Boolean(priorAnalysis.handoff_sent);
+  const alreadySiteVisitNotified = Boolean(priorAnalysis.sitevisit_whatsapp_sent);
 
   const analysis: Record<string, unknown> = {
     call_successful,
@@ -443,6 +520,7 @@ Deno.serve(async (req) => {
     agent_id: pick(data, ["agent_id"]),
     termination_reason: pick(metadata, ["termination_reason"]) || undefined,
     handoff_sent: transferred || undefined,
+    sitevisit_whatsapp_sent: siteVisit || undefined,
   };
 
   const row: Record<string, unknown> = { call_id, source: "elevenlabs" };
@@ -479,6 +557,16 @@ Deno.serve(async (req) => {
       reason: transferReason(transcript),
       budget: String(budget ?? ""),
       timeline: String(timeline ?? ""),
+    });
+  }
+
+  // ── Site-visit booked: WhatsApp both the sales team and the client ──
+  if (siteVisit && !alreadySiteVisitNotified) {
+    await sendSiteVisitWhatsApps({
+      name: String(lead_name ?? ""),
+      phone: String(lead_phone ?? ""),
+      project,
+      whenText: formatWhenIST(visitWhen),
     });
   }
 
