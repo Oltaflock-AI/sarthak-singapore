@@ -24,6 +24,33 @@ export interface ElevenPhoneNumber {
   assigned_agent?: { agent_id?: string; agent_name?: string } | null;
 }
 
+export interface Subscription {
+  tier: string;
+  character_count: number | null;
+  character_limit: number | null;
+  next_character_count_reset_unix: number | null;
+}
+
+// Account plan/quota. NOTE: ElevenLabs exposes only TTS *character* credits here
+// — never Conversational AI *minutes* — so callers derive minutes from the tier.
+export async function getSubscription(): Promise<Subscription> {
+  const res = await fetch("https://api.elevenlabs.io/v1/user/subscription", {
+    headers: { "xi-api-key": apiKey() },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`subscription ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const d = await res.json();
+  return {
+    tier: String(d?.tier ?? ""),
+    character_count: d?.character_count ?? null,
+    character_limit: d?.character_limit ?? null,
+    next_character_count_reset_unix: d?.next_character_count_reset_unix ?? null,
+  };
+}
+
 export async function listPhoneNumbers(): Promise<ElevenPhoneNumber[]> {
   const res = await fetch(`${API_BASE}/phone-numbers`, {
     headers: { "xi-api-key": apiKey() },

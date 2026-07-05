@@ -30,17 +30,26 @@ type Visit = {
   created_at: string;
 };
 
+type MinutesUsage = {
+  used_minutes: number;
+  total_minutes: number;
+  remaining_minutes: number;
+  reset_unix: number | null;
+};
+
 // Module-scope cache so leaving and returning to /overview doesn't flash empty
 // state. We keep the last successful payload and seed useState from it on
 // remount; the background refetch still runs to refresh the data.
 let cachedLeads: Lead[] = [];
 let cachedVisits: Visit[] = [];
+let cachedMinutes: MinutesUsage | null = null;
 
 const ICONS = {
   leads: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="7" r="3" /><path d="M3.5 17a6.5 6.5 0 0 1 13 0" /></svg>,
   qualified: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 10l3.5 3.5L15 6.5" /></svg>,
   visits: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.6" /><path d="M3 8.5h14M7 3v3M13 3v3" /></svg>,
   conv: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l5-5 3 3 6-7" /><path d="M14 8h3v3" /></svg>,
+  minutes: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10.5" r="6.5" /><path d="M10 7v3.6l2.3 1.6" /></svg>,
 };
 
 export default function Overview() {
@@ -48,17 +57,20 @@ export default function Overview() {
   const connectedCalls = calls.filter((c) => !isMissedCall(c)).length;
   const [leads, setLeads] = useState<Lead[]>(() => cachedLeads);
   const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
+  const [minutes, setMinutes] = useState<MinutesUsage | null>(() => cachedMinutes);
   const chartRefs = useRef<{ source: unknown; status: unknown }>({ source: null, status: null });
 
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        const [l, v] = await Promise.all([
+        const [l, v, m] = await Promise.all([
           fetch("/api/leads", { cache: "no-store" }).then((r) => r.json()),
           fetch("/api/site-visits", { cache: "no-store" }).then((r) => r.json()),
+          fetch("/api/usage/minutes", { cache: "no-store" }).then((r) => r.json()).catch(() => null),
         ]);
         if (Array.isArray(l)) { cachedLeads = l; setLeads(l); }
         if (Array.isArray(v)) { cachedVisits = v; setVisits(v); }
+        if (m && typeof m.total_minutes === "number") { cachedMinutes = m; setMinutes(m); }
       } catch (err) {
         console.error("[overview] fetch failed", err);
       }
@@ -209,6 +221,27 @@ export default function Overview() {
         <KpiCard label="Qualified" value={metrics.qualified + metrics.booked + metrics.converted} sub={`${qualificationRate}% qualification rate`} icon={ICONS.qualified} />
         <KpiCard label="Site Visits Booked" value={metrics.booked + metrics.converted} sub={`${todayBookings.length} booked today`} icon={ICONS.visits} />
         <KpiCard label="Conversion Rate" value={`${conversionRate}%`} sub={`${metrics.converted} converted · avg score ${avgScore}`} icon={ICONS.conv} />
+        <KpiCard
+          label="Voice Minutes"
+          value={minutes ? `${minutes.used_minutes} / ${minutes.total_minutes}` : "—"}
+          unit="mins"
+          sub={
+            minutes
+              ? `${minutes.remaining_minutes} min left${minutes.reset_unix ? ` · resets ${new Date(minutes.reset_unix * 1000).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}`
+              : "loading…"
+          }
+          icon={ICONS.minutes}
+          progress={minutes ? minutes.used_minutes / minutes.total_minutes : undefined}
+          progressColor={
+            minutes
+              ? minutes.used_minutes / minutes.total_minutes >= 0.9
+                ? "#ef4444"
+                : minutes.used_minutes / minutes.total_minutes >= 0.7
+                  ? "#f59e0b"
+                  : "#22c55e"
+              : undefined
+          }
+        />
       </div>
 
       {/* Priority leads — act now */}
