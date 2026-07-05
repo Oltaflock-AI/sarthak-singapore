@@ -32,11 +32,15 @@ export async function GET(req: NextRequest) {
     return NextResponse.json({ calls: data ?? [] });
   }
 
+  // List view: slim columns (drop the heavy `transcript` jsonb — it loads on
+  // click via ?id=) so we can return a much larger window without a huge payload.
+  // 500 (was 100) so real connected calls aren't buried under a burst of missed
+  // ones. isMissedCall falls back to analysis.call_initiation_failure + duration.
   let q = supabase
     .from("calls")
-    .select("*")
+    .select("id,call_id,lead_name,lead_phone,project,source,lead_score,score_label,duration_seconds,outcome,summary,language,analysis,created_at")
     .order("created_at", { ascending: false })
-    .limit(100);
+    .limit(500);
   if (DASHBOARD_SINCE) q = q.gte("created_at", DASHBOARD_SINCE);
   const { data, error } = await q;
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });

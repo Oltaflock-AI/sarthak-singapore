@@ -35,6 +35,15 @@ const CONNECT_FAIL_BACKOFF_MIN = 30;
 // Bump this up only if the VoBiz concurrency limit is raised.
 const MAX_GLOBAL_CONCURRENCY = 2;
 
+// VoBiz gives us only 3 SIP channels, and a channel is NOT freed the instant a
+// call ends: a clean hangup releases fast, but a dropped/badly-ended call can
+// hold its channel until a BYE/timeout (up to ~30s), and a warm transfer briefly
+// needs a 3rd channel too. So after ANY call ends we wait out this cooldown
+// before dialing a replacement — otherwise the new call grabs a channel while
+// the previous one is still tearing down and we trip VoBiz's 3/3 limit. Tune via
+// DIAL_COOLDOWN_SECS. The real fix is more VoBiz channels (EL now allows 20).
+const POST_CALL_COOLDOWN_SECS = Number(process.env.DIAL_COOLDOWN_SECS) || 15;
+
 // `calls.outcome` values that mean the lead never picked up. The webhook's
 // call_initiation_failure handler writes the ElevenLabs failure_reason
 // verbatim (busy | no-answer | unknown), defaulting to "failed".
@@ -212,6 +221,23 @@ async function dialNext(
   batchId?: string,
 ): Promise<{ queue_id: string; conversation_id: string | null }[]> {
   if (!withinCallWindowIST()) return []; // no calls outside 10:00–20:00 IST
+
+  // Post-call cooldown: if any call ended very recently, hold off dialing so its
+  // VoBiz channel has time to tear down (see POST_CALL_COOLDOWN_SECS). The webhook
+  // writes a `calls` row when a call ends, so the newest row ≈ the last hangup.
+  {
+    const { data: lastCall } = await supabase
+      .from("calls")
+      .select("created_at")
+      .order("created_at", { ascending: false })
+      .limit(1)
+      .maybeSingle();
+    if (lastCall?.created_at) {
+      const secsSince = (Date.now() - new Date(lastCall.created_at).getTime()) / 1000;
+      if (secsSince >= 0 && secsSince < POST_CALL_COOLDOWN_SECS) return [];
+    }
+  }
+
   const batches = await loadBatches(batchId);
   if (!batches.length) return [];
 

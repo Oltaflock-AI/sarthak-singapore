@@ -622,7 +622,9 @@ Deno.serve(async (req) => {
       const visitRow: Record<string, unknown> = {
         call_id,
         lead_phone: canonicalPhone,
-        status: "pending",
+        // A real cal.com booking IS a confirmed appointment — not "pending".
+        // ("done" is set later when the visit actually happens; "cancelled" on cancel.)
+        status: "confirmed",
         notes: booking.uid ? `Booked via cal.com · ${booking.uid}` : "Booked via voice agent (cal.com)",
       };
       if (lead_name) visitRow.lead_name = lead_name;

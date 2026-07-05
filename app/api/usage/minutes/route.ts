@@ -13,8 +13,10 @@ export const dynamic = "force-dynamic";
 // cycle. The plan allowance (denominator) is keyed off the subscription tier.
 
 // ConvAI minutes included per plan tier. Override with ELEVENLABS_PLAN_MINUTES.
+// `pro` is set to 1238 to match THIS account's plan page ("1,238 minutes of
+// calls included") — ElevenLabs' base Pro is 1100, so the account carries extra.
 const PLAN_MINUTES: Record<string, number> = {
-  free: 15, starter: 50, creator: 250, pro: 1100, scale: 3600, business: 13750,
+  free: 15, starter: 50, creator: 250, pro: 1238, scale: 3600, business: 13750,
 };
 
 // ElevenLabs resets monthly, so the current cycle starts one month before the
