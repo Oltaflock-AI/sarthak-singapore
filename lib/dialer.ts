@@ -19,6 +19,14 @@ import { cleanLeadName } from "@/lib/leadImport";
 
 const STALE_MIN = 6;
 
+// When placing a call THROWS (EL/VoBiz rejected, network, out of credits), hold
+// the row this long before it's eligible again. Without a backoff a failed dial
+// is re-queued with no next_attempt_at → immediately due → re-fired on the very
+// next tick (every few seconds with the dashboard open). That tight loop is the
+// July retry storm: same lead dialed repeatedly, VoBiz tripped to 3/3. 30 min of
+// spacing kills it while still recovering quickly once the API is healthy again.
+const CONNECT_FAIL_BACKOFF_MIN = 30;
+
 // Hard ceiling on simultaneous outbound calls across ALL batches. The VoBiz
 // trunk allows only 3 concurrent channels, and a warm transfer consumes an
 // extra channel (प्रिया dials the salesman while the caller holds). Running at
@@ -287,19 +295,23 @@ async function dialNext(
         globalFree--;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        const attempts = (next.attempts ?? 0) + 1;
-        const exhausted = attempts >= (next.max_attempts ?? 1);
+        // The call was never placed (EL/VoBiz rejected, network, out of credits).
+        // Deliberately do NOT touch `attempts` — that counter drives the multi-day
+        // retry cadence, and a placement failure isn't a real dial; burning it
+        // would let a transient outage march a lead through 1→3→5→7→15→30 and give
+        // up on the whole campaign without ever reaching anyone. And do NOT re-queue
+        // as immediately-due (the old bug): back off first so we don't re-fire on
+        // the next tick. Once the API is healthy the row dials normally next window.
         await supabase
           .from("call_queue")
           .update({
-            status: exhausted ? "failed" : "queued",
-            attempts,
+            status: "queued",
+            next_attempt_at: new Date(Date.now() + CONNECT_FAIL_BACKOFF_MIN * 60_000).toISOString(),
             last_error: msg,
-            completed_at: exhausted ? new Date().toISOString() : null,
           })
           .eq("id", next.id);
         dialed.push({ queue_id: next.id, conversation_id: null });
-        break; // API is unhappy — let the next tick try again
+        break; // API is unhappy — stop dialing this batch; retry after the backoff
       }
     }
   }
