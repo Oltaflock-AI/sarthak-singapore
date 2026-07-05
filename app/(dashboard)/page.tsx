@@ -34,7 +34,7 @@ type MinutesUsage = {
   used_minutes: number;
   total_minutes: number;
   remaining_minutes: number;
-  reset_unix: number | null;
+  since: string | null;
 };
 
 // Module-scope cache so leaving and returning to /overview doesn't flash empty
@@ -227,7 +227,7 @@ export default function Overview() {
           unit="mins"
           sub={
             minutes
-              ? `${minutes.remaining_minutes} min left${minutes.reset_unix ? ` · resets ${new Date(minutes.reset_unix * 1000).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}`
+              ? `${minutes.remaining_minutes} min left${minutes.since ? ` · since ${new Date(minutes.since).toLocaleDateString("en-IN", { day: "numeric", month: "short" })}` : ""}`
               : "loading…"
           }
           icon={ICONS.minutes}

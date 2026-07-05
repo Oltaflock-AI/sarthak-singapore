@@ -1,43 +1,27 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
-import { getSubscription } from "@/lib/elevenlabs";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
 
 // Conversational-AI minutes counter for the dashboard.
 //
-// ElevenLabs' API exposes only TTS *character* credits — there is no "minutes"
-// field — so we compute usage ourselves: every call's duration is recorded in
-// `calls`, so minutes used = sum(duration_seconds)/60 for the current billing
-// cycle. The plan allowance (denominator) is keyed off the subscription tier.
+// ElevenLabs' API exposes only TTS character credits — never ConvAI minutes — so
+// we compute usage ourselves: every call's duration is recorded in `calls`, so
+// minutes used = sum(duration_seconds)/60 since the billing start.
 
-// ConvAI minutes included per plan tier. Override with ELEVENLABS_PLAN_MINUTES.
-// `pro` is set to 1238 to match THIS account's plan page ("1,238 minutes of
-// calls included") — ElevenLabs' base Pro is 1100, so the account carries extra.
-const PLAN_MINUTES: Record<string, number> = {
-  free: 15, starter: 50, creator: 250, pro: 1238, scale: 3600, business: 13750,
-};
+// Plan allowance (denominator). Override with ELEVENLABS_PLAN_MINUTES.
+const TOTAL_MINUTES = Number(process.env.ELEVENLABS_PLAN_MINUTES) || 1200;
 
-// ElevenLabs resets monthly, so the current cycle starts one month before the
-// next reset. Fallback (no reset date): first of the current UTC month.
-function cycleStart(resetUnix: number | null): Date {
-  if (resetUnix) {
-    const s = new Date(resetUnix * 1000);
-    s.setUTCMonth(s.getUTCMonth() - 1);
-    return s;
-  }
-  const d = new Date();
-  return new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), 1));
-}
+// Count usage from here — the client's billing start, not ElevenLabs' monthly
+// reset. Override with MINUTES_SINCE (ISO 8601). Default: 4 Jul 2026, 6:00 AM IST.
+const BILLING_START = process.env.MINUTES_SINCE || "2026-07-04T06:00:00+05:30";
 
 export async function GET() {
   try {
-    const sub = await getSubscription().catch(() => null);
-    const tier = sub?.tier ?? "";
-    const start = cycleStart(sub?.next_character_count_reset_unix ?? null);
+    const start = new Date(BILLING_START);
 
-    // Sum call durations since the cycle start. Page through so a cycle with
+    // Sum call durations since the billing start. Page through so a period with
     // >1000 calls still totals correctly (PostgREST caps a page at 1000).
     let usedSecs = 0;
     let from = 0;
@@ -57,14 +41,11 @@ export async function GET() {
     }
 
     const used = Math.round(usedSecs / 60);
-    const total = Number(process.env.ELEVENLABS_PLAN_MINUTES) || PLAN_MINUTES[tier] || 1100;
     return NextResponse.json({
       used_minutes: used,
-      total_minutes: total,
-      remaining_minutes: Math.max(0, total - used),
-      tier: tier || null,
-      cycle_start: start.toISOString(),
-      reset_unix: sub?.next_character_count_reset_unix ?? null,
+      total_minutes: TOTAL_MINUTES,
+      remaining_minutes: Math.max(0, TOTAL_MINUTES - used),
+      since: start.toISOString(),
     });
   } catch (e) {
     return NextResponse.json(
