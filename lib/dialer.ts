@@ -366,9 +366,46 @@ async function closeFinishedBatches(batchId?: string): Promise<string[]> {
   return done;
 }
 
+// Only one dialer tick may DIAL at a time. The dashboard polls /api/voice/process
+// every few seconds AND a GitHub cron hits it every 10 min; without this, two
+// ticks each read the in-flight count, both see a free slot, and both dial —
+// overshooting MAX_GLOBAL_CONCURRENCY and tripping VoBiz's 3/3 limit. Atomic
+// single-row lock (dialer_lock migration); auto-expires after the TTL if a tick
+// dies mid-dial. Reconcile still runs every tick — only dialing is serialized.
+const DIAL_LOCK_TTL_SECS = 150;
+
+async function acquireDialLock(): Promise<boolean> {
+  const staleBefore = new Date(Date.now() - DIAL_LOCK_TTL_SECS * 1000).toISOString();
+  const { data, error } = await supabase
+    .from("dialer_lock")
+    .update({ locked_at: new Date().toISOString() })
+    .eq("id", 1)
+    .lt("locked_at", staleBefore)
+    .select("id");
+  if (error) {
+    console.error("[dialer] lock acquire error:", error.message);
+    return false; // fail closed — skip this tick's dialing; next tick retries
+  }
+  return (data?.length ?? 0) > 0;
+}
+
+async function releaseDialLock(): Promise<void> {
+  // Free it immediately (epoch < any TTL window) so the next tick can dial.
+  await supabase.from("dialer_lock").update({ locked_at: new Date(0).toISOString() }).eq("id", 1);
+}
+
 export async function processTick(batchId?: string): Promise<TickResult> {
   const { reconciled, rescheduled } = await reconcile(batchId);
-  const dialed = await dialNext(batchId);
+  // Serialize dialing across all concurrent ticks (dashboard + cron + tabs) so we
+  // never overshoot the concurrency cap and trip VoBiz's 3/3 limit.
+  let dialed: { queue_id: string; conversation_id: string | null }[] = [];
+  if (await acquireDialLock()) {
+    try {
+      dialed = await dialNext(batchId);
+    } finally {
+      await releaseDialLock();
+    }
+  }
   const batchDone = await closeFinishedBatches(batchId);
   const { count: active } = await supabase
     .from("call_queue")
