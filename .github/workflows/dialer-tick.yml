@@ -17,8 +17,12 @@ name: Dialer tick
 
 on:
   # Resumed 2026-07-06 — new ElevenLabs account (agent Sarthak Miracle) is live.
+  # 2026-07-06 re-arm: after the Jul 4 pause (schedule commented out) and Jul 6
+  # un-comment, GitHub never re-registered the cron — zero scheduled runs fired.
+  # Changing the cron string to an explicit minute list forces GitHub to re-read
+  # and re-register the schedule. Still every 10 minutes.
   schedule:
-    - cron: "*/10 * * * *" # every 10 min (GitHub may delay a few min under load)
+    - cron: "5,15,25,35,45,55 * * * *" # every 10 min (GitHub may delay/drop under load)
   workflow_dispatch: {} # allow manual runs from the Actions tab
 
 # If a tick overruns, don't pile up concurrent runs.

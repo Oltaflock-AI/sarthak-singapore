@@ -20,8 +20,10 @@ name: Zoho lead sync
 
 on:
   # Resumed 2026-07-06 — new ElevenLabs account live.
+  # 2026-07-06 re-arm: GitHub didn't re-register this cron after the Jul 4 pause
+  # + Jul 6 un-comment. New cron string forces a re-read. Still every 6 hours.
   schedule:
-    - cron: "0 */6 * * *" # every 6 hours
+    - cron: "15 0,6,12,18 * * *" # every 6 hours (at :15)
   workflow_dispatch: {} # manual trigger — use this for the first backfill
 
 concurrency:
