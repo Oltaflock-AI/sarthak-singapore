@@ -190,6 +190,43 @@ breaks call recording. Idempotent per call via `analysis` flags.
 Site-visit member name/contact shown to the client come from `SITEVISIT_SALES_NAME` /
 `SITEVISIT_SALES_CONTACT` (fall back to the handoff number).
 
+### Approved template copy
+
+All templates are language **`en`** and pre-approved on the Interakt / Meta side.
+
+**`ai_ssg_site_visit_booked`** — to the sales team:
+> 🏠 Hey Team, AI has booked a Site Visit
+> Lead: `{{1}}`
+> Phone: `{{2}}`
+> Project: `{{3}}`
+> When: `{{4}}`
+> Status: `{{5}}`
+>
+> 👉 Please be ready at the site.
+
+`bodyValues` → `[lead name, phone (+91…), project, when (IST), "Confirmed"]`
+
+**`aiclient_ssg_sitevisit_booked`** — to the client (lead's own number):
+> 👋 Hi `{{1}}`,
+>
+> Your site visit for `{{2}}` is confirmed for `{{3}}`.
+>
+> 👤 Our team member: `{{4}}` will receive you.
+> 📞 Contact: `{{5}}`
+>
+> Reply RESCHEDULE if you need another time.
+> — Sarthak Singapore Group
+
+`bodyValues` → `[client name, project, when (IST), team member name, contact (+91…)]`
+
+**`lead_transfer_alert`** — to the sales team on a warm transfer:
+> 6 vars → `[name, phone, project, reason, budget, timeline]` — approved copy managed
+> in Interakt (`WHATSAPP_HANDOFF_TEMPLATE` overrides the name).
+
+`when` is formatted in IST (e.g. "Sun, 12 Jul 2026, 4:30 PM IST"). Both site-visit
+sends are idempotent per call via `analysis.sitevisit_whatsapp_sent`; the transfer send
+via `analysis.handoff_sent`.
+
 ---
 
 ## Site visits (Cal.com)
