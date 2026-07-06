@@ -21,7 +21,7 @@ dashboard. Built by [Oltaflock](https://oltaflock.ai).
 - **Site-visit booking** — **Cal.com** (agent tool)
 - **WhatsApp** — **Interakt** (BSP) — sales/customer notifications
 - **Enrichment** — OpenAI GPT-4.1-mini
-- **Scheduling** — **GitHub Actions** cron (Vercel Hobby forbids sub-daily crons)
+- **Scheduling** — **Supabase pg_cron** (Postgres cron + pg_net) hitting the Vercel endpoints (Vercel Hobby forbids sub-daily crons; GitHub Actions proved unreliable)
 
 ---
 
@@ -29,11 +29,11 @@ dashboard. Built by [Oltaflock](https://oltaflock.ai).
 
 ```
 Zoho CRM (Project_Name contains "Miracle", Lead_Status = "Not Answer")
-        │   /api/zoho/sync  (GitHub Actions, every 6h)
+        │   /api/zoho/sync  (Supabase pg_cron, every 6h)
         ▼
 call_queue  ──►  dialer engine (lib/dialer.ts)  ──►  ElevenLabs outbound call
    (per-lead     /api/voice/process               over VoBiz SIP trunk
-    cadence)     GitHub Actions, every 10 min             │
+    cadence)     Supabase pg_cron, every 1 min             │
         ▲                                                 │ प्रिया qualifies,
         │  no-pickup → reschedule on cadence              │ books visit / transfers
         │                                                 ▼
@@ -67,8 +67,8 @@ call_queue  ──►  dialer engine (lib/dialer.ts)  ──►  ElevenLabs outb
 
 ## The outbound dialer engine
 
-`lib/dialer.ts` — driven by `/api/voice/process` (`processTick`), called every 10 min
-by a GitHub Actions cron (and by the dashboard while open). Each tick:
+`lib/dialer.ts` — driven by `/api/voice/process` (`processTick`), called every 1 min
+by a **Supabase pg_cron** job (and by the dashboard while open). Each tick:
 
 1. **`reconcile`** — settle `dialing` rows whose call ended (a `calls` row exists) or
    went stale (`STALE_MIN = 6`). Picked-up → `completed`; no-pickup → rescheduled on
@@ -126,20 +126,38 @@ reach — and queues them for the AI dialer. Read-only on Zoho (no write-back).
 
 ---
 
-## Automation — GitHub Actions crons
+## Automation — Supabase pg_cron
 
-Vercel Hobby rejects crons more frequent than daily, so schedules live in GitHub Actions
-(`.github/workflows/`). Both hit gated Vercel endpoints with `Authorization: Bearer $CRON_SECRET`
-(see `proxy.ts`).
+Vercel Hobby rejects crons more frequent than daily, so the schedules run inside
+**Supabase Postgres** via **pg_cron** + **pg_net**: on each tick Postgres makes an HTTP
+call to the gated Vercel endpoint with `Authorization: Bearer $CRON_SECRET` (see `proxy.ts`).
+This replaced GitHub Actions, whose scheduler silently stopped firing after a pause/resume
+and, even when healthy, only ran ~hourly (see [Operations runbook](#operations-runbook)).
 
-| Workflow            | Schedule        | Hits                | Purpose                          |
-|---------------------|-----------------|---------------------|----------------------------------|
-| `dialer-tick.yml`   | every 10 min    | `/api/voice/process`| drive the queue / callbacks      |
-| `zoho-sync.yml`     | every 6 hours   | `/api/zoho/sync`    | top up the queue from Zoho       |
+| pg_cron job    | Schedule            | Hits (via pg_net)     | Purpose                     |
+|----------------|---------------------|-----------------------|-----------------------------|
+| `dialer-tick`  | `* * * * *` (1 min)  | `GET /api/voice/process` | drive the queue / callbacks |
+| `zoho-sync`    | `15 0,6,12,18 * * *` (6 h) | `POST /api/zoho/sync` | top up the queue from Zoho  |
 
-GitHub repo secrets: `CRON_SECRET` (= Vercel value). Variables: `APP_URL`
-(`https://sarthak-singapore.vercel.app`). To pause the campaign, comment out the
-`schedule:` blocks (keep `workflow_dispatch`) and pause the batch.
+- **Secrets** live in **Supabase Vault** (`vault.decrypted_secrets`), never in a migration:
+  `app_url` (`https://sarthak-singapore.vercel.app`) and `cron_secret` (= Vercel `CRON_SECRET`).
+  Insert once: `select vault.create_secret('<value>', '<name>');`
+- **Defined in** `supabase/migrations/20260706130000_dialer_pgcron.sql` and `..._130001_zoho_pgcron.sql`
+  (`cron.schedule(...)`, idempotent by job name).
+- **Firing frequently is safe** — `dialer_lock` (single-row advisory lock, 150 s TTL)
+  serializes concurrent ticks, so 1-min firing never over-dials or trips VoBiz 3/3.
+- **Inspect / manage** (SQL):
+  ```sql
+  select * from cron.job;                                    -- registered jobs
+  select * from cron.job_run_details order by start_time desc limit 20;  -- run log
+  select status_code, content, created from net._http_response order by created desc limit 10;  -- endpoint replies
+  select cron.unschedule('dialer-tick');                     -- pause the dialer
+  update call_batches set status = 'paused' where status = 'running';  -- pause the campaign
+  ```
+
+> **GitHub Actions is retired.** The `.github/workflows/` crons were deleted (they were
+> unreliable). If you ever need a manual one-off tick, just curl the endpoint:
+> `curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/voice/process`.
 
 ---
 
@@ -308,7 +326,7 @@ SITEVISIT_SALES_NAME= / SITEVISIT_SALES_CONTACT=   # optional — shown to the c
 VOBIZ_AUTH_TOKEN= / VOBIZ_CALLBACK_URL=
 ```
 
-**GitHub Actions:** secret `CRON_SECRET`, variable `APP_URL`.
+**Supabase Vault** (used by pg_cron): `cron_secret` (= Vercel `CRON_SECRET`) and `app_url`.
 
 ---
 
@@ -328,16 +346,16 @@ VOBIZ_AUTH_TOKEN= / VOBIZ_CALLBACK_URL=
 | `app/api/calls/route.ts` | Gated calls reader (latest 500, slim) |
 | `supabase/functions/elevenlabs-webhook/index.ts` | Post-call → calls/leads/site_visits + WhatsApp |
 | `supabase/functions/vobiz-webhook/index.ts` | SIP callbacks → `call_cdr` |
-| `.github/workflows/dialer-tick.yml` / `zoho-sync.yml` | Cron schedulers |
+| `supabase/migrations/20260706130000_dialer_pgcron.sql` / `..._130001_zoho_pgcron.sql` | pg_cron schedulers |
 | `proxy.ts` | Password gate + `CRON_SECRET` bypass for cron endpoints |
 
 ---
 
 ## Operations runbook
 
-**Pause the campaign** — comment out `schedule:` in both workflow files (keep
-`workflow_dispatch`) **and** set the batch `status = paused`. The edge functions are
-passive receivers; they place no calls and need no stopping.
+**Pause the campaign** — `select cron.unschedule('dialer-tick');` (and `'zoho-sync'`)
+in Supabase **and** set the batch `status = paused`. The edge functions are passive
+receivers; they place no calls and need no stopping.
 
 **Resume / migrate to a new ElevenLabs account:**
 1. Set the new `ELEVENLABS_API_KEY` in **Vercel**; set the new `ELEVENLABS_WEBHOOK_SECRET`
@@ -347,9 +365,13 @@ passive receivers; they place no calls and need no stopping.
 3. **Import the number** into the new account (SIP trunk) and **assign it to the agent**;
    update the batch's `agent_phone_number_id` to the new `phnum_…`.
 4. **Enable `first_message` override** on the new agent (else no-name leads fail).
-5. Un-comment the two cron `schedule:` blocks; un-pause the batch (`status = running`).
+5. Re-schedule the pg_cron jobs if they were unscheduled (re-run the two
+   `supabase/migrations/*_pgcron.sql`, or `select cron.schedule(...)`); un-pause the
+   batch (`status = running`). If the `CRON_SECRET` changed, update the `cron_secret`
+   vault secret too.
 6. Verify: trigger one tick (`curl -H "Authorization: Bearer $CRON_SECRET" $APP_URL/api/voice/process`)
-   and confirm a non-null `conversation_id`.
+   and confirm a non-null `conversation_id`; then check `cron.job_run_details` shows the
+   automatic runs succeeding.
 
 **Known issues & fixes (all resolved in code — see git history):**
 - *Retry storm / VoBiz 3/3* → connect-failure backoff + post-call cooldown.
