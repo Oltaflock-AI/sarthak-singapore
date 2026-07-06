@@ -4,11 +4,13 @@
 
 const API_BASE = "https://api.elevenlabs.io/v1/convai";
 
-// Known agent (overridable via env). See CLAUDE.md / deploy doc.
-// 2026-07: migrated to a new ElevenLabs account — agent "Sarthak Miracle".
-// (Old account's agent was agent_7701kt6yb510f5hrpm1tsmjx61w4.)
-export const AGENT_ID =
-  process.env.ELEVENLABS_AGENT_ID || "agent_6801kwrchx5yfnha0jechj2t67pm";
+// Known agent — "Sarthak Miracle" on the 2026-07 ElevenLabs account.
+// Pinned in code, NOT env-driven, on purpose: after the account migration Vercel
+// still held ELEVENLABS_AGENT_ID = the OLD agent (agent_7701kt6yb510f5hrpm1tsmjx61w4),
+// which overrode the env fallback and failed every call with "agent not found".
+// Hardcoding keeps the app and the webhook's agent filter in lockstep and immune
+// to a stale deployment env. Change it here (and in the webhook) on the next migration.
+export const AGENT_ID = "agent_6801kwrchx5yfnha0jechj2t67pm";
 
 function apiKey(): string {
   const k = process.env.ELEVENLABS_API_KEY;
