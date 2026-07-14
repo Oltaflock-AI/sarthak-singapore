@@ -3,6 +3,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { parseLeadsFile, type ParseResult, type ParsedLead } from "@/lib/parseLeads";
+import { AGENTS } from "@/lib/agents";
 import type { LiveCallStatus, CallPhase } from "@/lib/elevenlabs";
 
 interface PhoneNumber {
@@ -372,6 +373,9 @@ export default function DialerPage() {
   const [pickerOpen, setPickerOpen] = useState(false);
 
   // single call (keypad)
+  // Which property agent speaks on single calls. Batches/Zoho stay on Miracle
+  // until the multi-property rollout reaches them.
+  const [agentId, setAgentId] = useState(AGENTS[0].agentId);
   const [sName, setSName] = useState("");
   const [sPhone, setSPhone] = useState("");
   const [singleMsg, setSingleMsg] = useState<string | null>(null);
@@ -425,6 +429,15 @@ export default function DialerPage() {
   useEffect(() => {
     if (phoneId) localStorage.setItem("dialer_phone_id", phoneId);
   }, [phoneId]);
+
+  // restore + persist the property-agent choice
+  useEffect(() => {
+    const saved = localStorage.getItem("dialer_agent_id");
+    if (saved && AGENTS.some((a) => a.agentId === saved)) setAgentId(saved);
+  }, []);
+  useEffect(() => {
+    localStorage.setItem("dialer_agent_id", agentId);
+  }, [agentId]);
 
   const selected = useMemo(() => numbers.find((n) => n.id === phoneId) ?? null, [numbers, phoneId]);
 
@@ -492,6 +505,7 @@ export default function DialerPage() {
           to_number: sPhone,
           lead_name: sName || null,
           agent_phone_number_id: phoneId,
+          agent_id: agentId,
         }),
       }).then((x) => x.json());
       if (r?.ok) {
@@ -789,6 +803,18 @@ export default function DialerPage() {
       <div style={{ display: "flex", justifyContent: "center" }}>
         <div className="panel" style={{ width: "100%", maxWidth: 440 }}>
           <div className="panel-body" style={{ display: "flex", flexDirection: "column", alignItems: "center", gap: 14, paddingTop: 26 }}>
+            <label style={{ width: "100%", maxWidth: 280, display: "flex", flexDirection: "column", gap: 5, fontSize: 11, color: "var(--muted)", textTransform: "uppercase", letterSpacing: 0.5, fontWeight: 600 }}>
+              Property
+              <select
+                value={agentId}
+                onChange={(e) => setAgentId(e.target.value)}
+                style={{ ...inputStyle, textTransform: "none", letterSpacing: 0, cursor: "pointer", textAlign: "center" }}
+              >
+                {AGENTS.map((a) => (
+                  <option key={a.agentId} value={a.agentId}>{a.property}</option>
+                ))}
+              </select>
+            </label>
             <input
               style={{ ...inputStyle, maxWidth: 280, textAlign: "center" }}
               placeholder="Lead name (optional)"
@@ -938,6 +964,7 @@ export default function DialerPage() {
             />
             <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 5 }}>
               Format: name, phone, project — phone alone also works (10 digits auto +91).
+              Batches always dial through the Singapore Miracle agent for now.
             </div>
           </div>
 

@@ -244,6 +244,8 @@ async function sendInteraktHandoff(p: {
 }): Promise<void> {
   const byProject: Record<string, string | undefined> = {
     "Singapore Miracle": Deno.env.get("WHATSAPP_HANDOFF_MIRACLE"),
+    "Singapore One Street": Deno.env.get("WHATSAPP_HANDOFF_ONE_STREET"),
+    "The Grand Virasat": Deno.env.get("WHATSAPP_HANDOFF_VIRASAT"),
   };
   const to = byProject[p.project] ?? Deno.env.get("WHATSAPP_HANDOFF_DEFAULT") ?? "";
   await sendInteraktMessage(
@@ -334,15 +336,19 @@ Deno.serve(async (req) => {
   const call_id = pick<string>(data, ["conversation_id"]);
   if (!call_id) return json({ ok: true, verified: true }); // probe / unknown shape
 
-  // Only store calls from THIS dashboard's agent. Other agents in the same
+  // Only store calls from THIS dashboard's agents. Other agents in the same
   // ElevenLabs workspace share this workspace-level post-call webhook, but their
   // calls must not pollute the Sarthak dashboard. ElevenLabs has no per-agent
   // webhook off switch (a null agent override = inherit workspace), so filter here.
-  // 2026-07: new ElevenLabs account, agent "Sarthak Miracle". Old: agent_7701kt6yb510f5hrpm1tsmjx61w4.
-  const SARTHAK_AGENT_ID =
-    Deno.env.get("ELEVENLABS_AGENT_ID") ?? "agent_6801kwrchx5yfnha0jechj2t67pm";
+  // One agent per property; keep in lockstep with lib/agents.ts. Pinned in code,
+  // not env (a stale env broke the 2026-07 migration).
+  const SARTHAK_AGENTS: Record<string, string> = {
+    agent_6801kwrchx5yfnha0jechj2t67pm: "Singapore Miracle",
+    agent_7201kxbkvpsrejxsvjpk0nt94yg6: "Singapore One Street",
+    agent_7701kxbkvr04ef19snxed4hzk93e: "The Grand Virasat",
+  };
   const incomingAgentId = pick<string>(data, ["agent_id"]);
-  if (incomingAgentId && incomingAgentId !== SARTHAK_AGENT_ID) {
+  if (incomingAgentId && !(incomingAgentId in SARTHAK_AGENTS)) {
     return json({ ok: true, ignored: "other agent", agent_id: incomingAgentId });
   }
 
@@ -371,7 +377,8 @@ Deno.serve(async (req) => {
     // dynamic vars in the payload and an existing leads row are fallbacks.
     // Without this every missed call shows on the dashboard as "Unknown caller".
     let failName = pick<string>(dyn, ["lead_name", "user_name", "name"]); // not callee_name (defaults to "ग्राहक")
-    let failProject = pick<string>(dyn, ["project"]);
+    let failProject = pick<string>(dyn, ["project"]) ??
+      (incomingAgentId ? SARTHAK_AGENTS[incomingAgentId] : undefined);
     const { data: queued } = await supabase
       .from("call_queue").select("lead_name, project").eq("conversation_id", call_id).maybeSingle();
     if (!failName && queued?.lead_name) failName = String(queued.lead_name);
@@ -453,8 +460,8 @@ Deno.serve(async (req) => {
   // Lead attributes — agent-configured data-collection fields (best-effort key names).
   const lead_name = (collected(dcr, ["lead_name", "callee_name", "name", "customer_name"]) as string) ??
     (pick<string>(dyn, ["user_name", "lead_name", "name"]));
-  // Only one project in this campaign — never derive (or invent) another.
-  const project = "Singapore Miracle";
+  // One project per agent — derive from the agent id, never from the transcript.
+  const project = SARTHAK_AGENTS[incomingAgentId ?? ""] ?? "Singapore Miracle";
   const language = pick<string>(initCfg, ["conversation_config_override.agent.language"]) ??
     (collected(dcr, ["language", "language_spoken"]) as string | null);
   const timeline = collected(dcr, ["timeline", "purchase_timeline"]);

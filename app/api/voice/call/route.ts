@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { placeOutboundCall, greetingFor } from "@/lib/elevenlabs";
+import { agentById, DEFAULT_AGENT } from "@/lib/agents";
 import { cleanLeadName } from "@/lib/leadImport";
 
 export const runtime = "nodejs";
@@ -16,10 +17,16 @@ export async function POST(req: NextRequest) {
   if (!agentPhoneNumberId)
     return NextResponse.json({ error: "agent_phone_number_id required" }, { status: 400 });
 
+  // Which property agent dials. Unknown ids are rejected rather than silently
+  // falling back to Miracle — a typo must not pitch the wrong property.
+  const agent = body?.agent_id ? agentById(body.agent_id) : DEFAULT_AGENT;
+  if (!agent)
+    return NextResponse.json({ error: `unknown agent_id: ${body.agent_id}` }, { status: 400 });
+
   // Clean the typed name the same way as imports: strip a trailing "ji",
   // treat "Unknown"/blank as no-name (→ name-less greeting).
   const leadName: string | null = cleanLeadName(body?.lead_name);
-  const project: string | null = body?.project ?? null;
+  const project: string | null = body?.project ?? agent.property;
 
   const { data: batch, error: bErr } = await supabase
     .from("call_batches")
@@ -53,7 +60,7 @@ export async function POST(req: NextRequest) {
   if (project) dyn.project = project;
 
   try {
-    const r = await placeOutboundCall({ agentPhoneNumberId, toNumber, dynamicVars: dyn, firstMessageOverride: greet.firstMessageOverride });
+    const r = await placeOutboundCall({ agentPhoneNumberId, toNumber, agentId: agent.agentId, dynamicVars: dyn, firstMessageOverride: greet.firstMessageOverride });
     await supabase
       .from("call_queue")
       .update({
