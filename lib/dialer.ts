@@ -283,11 +283,15 @@ async function dialNext(
         continue;
       }
 
+      // Which property agent dials this lead (Miracle / One Street / Grand
+      // Virasat). Set by the Zoho sync per campaign; absent → default agent.
+      const agentId = next.dynamic_vars?.agent_id as string | undefined;
+
       // Strip control keys before sending dynamic vars to the agent. callee_name
       // is set by greetingFor below, so drop any stale copy from the queue row.
       const dyn: Record<string, string> = {};
       for (const [k, v] of Object.entries(next.dynamic_vars ?? {})) {
-        if (k === "agent_phone_number_id" || k === "callee_name") continue;
+        if (k === "agent_phone_number_id" || k === "callee_name" || k === "agent_id") continue;
         if (v != null) dyn[k] = String(v);
       }
       if (next.project) dyn.project = next.project;
@@ -299,6 +303,7 @@ async function dialNext(
       try {
         const r = await placeOutboundCall({
           agentPhoneNumberId,
+          agentId,
           toNumber: next.lead_phone,
           dynamicVars: dyn,
           firstMessageOverride: greet.firstMessageOverride,

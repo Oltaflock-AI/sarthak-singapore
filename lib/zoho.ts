@@ -72,6 +72,7 @@ export interface MiracleLead {
   phone: string | null;
   temperature: string | null; // Hot / Warm / Cold, from Enquiry_For1
   status: string | null;      // Lead_Status
+  projectTokens: string[];    // lowercased Project_Name tokens ("miracle", "one street", "virasat a"…)
 }
 
 // Fields we pull. Zoho v8 REQUIRES an explicit `fields` param on list calls
@@ -81,18 +82,20 @@ const LEAD_FIELDS = [
   "Project_Name", "Enquiry_For1", "Lead_Source", "Lead_Status", "City",
 ].join(",");
 
-// Sarthak's CRM holds ~30k leads across ~60 projects; "Singapore Miracle" is the
-// subset whose Project_Name contains "Miracle" (~1k leads, some multi-project
-// like "Miracle,Marina"). Filter on the structured field, NOT a free-text search.
-function isMiracle(lead: ZohoLead): boolean {
-  return String(lead.Project_Name ?? "")
-    .split(",")
-    .some((p) => p.trim().toLowerCase() === "miracle");
-}
+// Sarthak's CRM holds ~30k leads across ~60 projects. Campaigns filter the
+// structured Project_Name field on lowercased comma-tokens (see projectTokens),
+// NOT a free-text search — e.g. "one street", "virasat a", "miracle".
 
 // Human callers mark leads they couldn't reach as Lead_Status = "Not Answer".
 // That subset (~286 Miracle leads) is what the AI dialer chases.
 export const NOT_ANSWER = "not answer";
+
+function projectTokens(l: ZohoLead): string[] {
+  return String(l.Project_Name ?? "")
+    .split(",")
+    .map((p) => p.trim().toLowerCase())
+    .filter(Boolean);
+}
 
 function normalize(l: ZohoLead): MiracleLead {
   const str = (v: unknown) => (v == null ? "" : String(v).trim());
@@ -104,13 +107,15 @@ function normalize(l: ZohoLead): MiracleLead {
     phone: str(l.Phone) || str(l.Mobile) || null,
     temperature: enquiry ? enquiry.split("-")[0].trim() : null,
     status: str(l.Lead_Status) || null,
+    projectTokens: projectTokens(l),
   };
 }
 
-// All Singapore Miracle leads whose Lead_Status == "Not Answer". Full page_token
-// scan of the module (search criteria hard-caps at 2000, which would miss some),
-// so this is heavy but the target set is small and the sync runs infrequently.
-export async function getMiracleNoAnswerLeads(): Promise<MiracleLead[]> {
+// Every lead whose Lead_Status == "Not Answer", across ALL projects, normalized
+// with its Project_Name tokens. Full page_token scan of the module (search
+// criteria hard-caps at 2000, which would miss some). One scan feeds every
+// property campaign — the caller classifies by projectTokens.
+export async function getNoAnswerLeads(): Promise<MiracleLead[]> {
   const out: MiracleLead[] = [];
   let token: string | null = null;
   for (let page = 0; page < 250; page++) {
@@ -119,14 +124,19 @@ export async function getMiracleNoAnswerLeads(): Promise<MiracleLead[]> {
     const res = await crm(`Leads?${qs.toString()}`);
     if (res.status === 204) break;
     const data = await res.json().catch(() => ({}));
-    if (!res.ok) throw new Error(`Zoho getMiracleNoAnswerLeads failed (${res.status}): ${JSON.stringify(data)}`);
+    if (!res.ok) throw new Error(`Zoho getNoAnswerLeads failed (${res.status}): ${JSON.stringify(data)}`);
     for (const l of (data.data ?? []) as ZohoLead[]) {
-      if (isMiracle(l) && String(l.Lead_Status ?? "").toLowerCase() === NOT_ANSWER) out.push(normalize(l));
+      if (String(l.Lead_Status ?? "").toLowerCase() === NOT_ANSWER) out.push(normalize(l));
     }
     token = data.info?.next_page_token ?? null;
     if (!data.info?.more_records || !token) break;
   }
   return out;
+}
+
+// Backward-compatible Miracle-only view (Singapore Miracle campaign).
+export async function getMiracleNoAnswerLeads(): Promise<MiracleLead[]> {
+  return (await getNoAnswerLeads()).filter((l) => l.projectTokens.includes("miracle"));
 }
 
 // Write fields back onto a lead (e.g. call outcome / score / next follow-up).
