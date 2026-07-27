@@ -34,8 +34,10 @@ export interface Subscription {
   next_character_count_reset_unix: number | null;
 }
 
-// Account plan/quota. NOTE: ElevenLabs exposes only TTS *character* credits here
-// — never Conversational AI *minutes* — so callers derive minutes from the tier.
+// Account plan/quota. ElevenLabs bills everything (TTS *and* Conversational AI)
+// out of one credit pool; the API still calls it "characters", so
+// character_count = credits spent this billing period and character_limit =
+// the plan's credit quota.
 export async function getSubscription(): Promise<Subscription> {
   const res = await fetch("https://api.elevenlabs.io/v1/user/subscription", {
     headers: { "xi-api-key": apiKey() },
@@ -51,6 +53,128 @@ export async function getSubscription(): Promise<Subscription> {
     character_count: d?.character_count ?? null,
     character_limit: d?.character_limit ?? null,
     next_character_count_reset_unix: d?.next_character_count_reset_unix ?? null,
+  };
+}
+
+// ── Credits ─────────────────────────────────────────────────────────────────
+// Two ElevenLabs endpoints, different permissions:
+//   /v1/user/subscription        → needs `user_read` on the key. Gives the plan
+//                                  quota + credits spent this billing period.
+//   /v1/usage/character-stats    → works on a restricted key. Gives credits
+//                                  spent over an arbitrary window, optionally
+//                                  broken down (product_type = convai / tts / …).
+// We read both so a key without `user_read` still yields a usage number.
+
+export interface CreditsSpent {
+  total: number;
+  byProduct: Record<string, number>;
+}
+
+// Credits spent in [startMs, endMs). Times are UNIX **milliseconds** — that's
+// what this endpoint wants despite the `_unix` param names.
+export async function getCreditsSpent(
+  startMs: number,
+  endMs: number,
+): Promise<CreditsSpent> {
+  const qs = new URLSearchParams({
+    start_unix: String(Math.round(startMs)),
+    end_unix: String(Math.round(endMs)),
+    aggregation_interval: "day",
+    metric: "credits",
+    breakdown_type: "product_type",
+  });
+  const res = await fetch(`https://api.elevenlabs.io/v1/usage/character-stats?${qs}`, {
+    headers: { "xi-api-key": apiKey() },
+    cache: "no-store",
+  });
+  if (!res.ok) {
+    const t = await res.text().catch(() => "");
+    throw new Error(`usage ${res.status}: ${t.slice(0, 200)}`);
+  }
+  const d = await res.json();
+  // Shape: { time: number[], usage: { "<bucket>": number[] } }
+  const byProduct: Record<string, number> = {};
+  let total = 0;
+  for (const [bucket, series] of Object.entries(d?.usage ?? {})) {
+    const points: unknown[] = Array.isArray(series) ? series : [];
+    let sum = 0;
+    for (const n of points) if (typeof n === "number" && Number.isFinite(n)) sum += n;
+    byProduct[bucket] = sum;
+    total += sum;
+  }
+  return { total, byProduct };
+}
+
+export interface CreditUsage {
+  used: number | null;        // credits spent this billing period
+  total: number | null;       // plan quota
+  remaining: number | null;
+  tier: string | null;
+  resets_at: string | null;   // ISO — next quota reset
+  convai_used: number | null; // Conversational AI slice of `used`, if known
+  window_start: string | null;
+  source: "subscription" | "usage-stats";
+  warning: string | null;     // why a field is null, for the dashboard
+}
+
+// Plan quota fallback for keys that can't read /v1/user/subscription.
+const PLAN_CREDITS = Number(process.env.ELEVENLABS_PLAN_CREDITS) || 0;
+
+// One credits reading for the dashboard. Never throws unless BOTH endpoints
+// fail — a partial answer still beats an empty KPI.
+export async function getCreditUsage(): Promise<CreditUsage> {
+  let subError: string | null = null;
+  let usageError: string | null = null;
+
+  const sub = await getSubscription().catch((e: unknown) => {
+    subError = e instanceof Error ? e.message : String(e);
+    return null;
+  });
+
+  // Billing window: from the previous reset (next reset − 1 month) to now.
+  const now = Date.now();
+  const resetMs = sub?.next_character_count_reset_unix
+    ? sub.next_character_count_reset_unix * 1000
+    : null;
+  const windowStart = (() => {
+    if (resetMs) {
+      const d = new Date(resetMs);
+      d.setMonth(d.getMonth() - 1);
+      return d.getTime();
+    }
+    return now - 30 * 24 * 60 * 60 * 1000; // no reset date → trailing 30 days
+  })();
+
+  const spent = await getCreditsSpent(windowStart, now).catch((e: unknown) => {
+    usageError = e instanceof Error ? e.message : String(e);
+    return null;
+  });
+
+  if (!sub && !spent) {
+    throw new Error(`credits unavailable — ${subError ?? "?"} / ${usageError ?? "?"}`);
+  }
+
+  const convai = spent
+    ? Object.entries(spent.byProduct)
+        .filter(([k]) => k.toLowerCase().includes("convai") || k.toLowerCase().includes("agent"))
+        .reduce((a, [, v]) => a + v, 0)
+    : null;
+
+  const used = sub?.character_count ?? spent?.total ?? null;
+  const total = sub?.character_limit ?? (PLAN_CREDITS || null);
+
+  return {
+    used: used == null ? null : Math.round(used),
+    total: total == null ? null : Math.round(total),
+    remaining: used != null && total != null ? Math.max(0, Math.round(total - used)) : null,
+    tier: sub?.tier || null,
+    resets_at: resetMs ? new Date(resetMs).toISOString() : null,
+    convai_used: convai == null ? null : Math.round(convai),
+    window_start: new Date(windowStart).toISOString(),
+    source: sub ? "subscription" : "usage-stats",
+    warning: sub
+      ? null
+      : `plan quota unavailable (${subError ?? "no subscription access"})${PLAN_CREDITS ? " — using ELEVENLABS_PLAN_CREDITS" : ""}`,
   };
 }
 
