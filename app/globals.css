@@ -203,8 +203,8 @@ body {
 .panel-body.flush { padding: 0; }
 
 /* ── KPI cards ───────────────────────────────────────────────────────────── */
-/* Six KPIs → 3×2 on desktop, so no card is left stranded on its own row. */
-.kpi-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 14px; margin-bottom: 22px; }
+/* Four KPIs → one clean row on desktop. */
+.kpi-grid { display: grid; grid-template-columns: repeat(4, 1fr); gap: 14px; margin-bottom: 22px; }
 .kpi {
   background: var(--panel);
   border: 1px solid var(--line);
