@@ -68,6 +68,35 @@ export function normalizePhone(raw: string | null | undefined): string {
   return digits ? `+${digits}` : "";
 }
 
+// Site-visit times arrive as an ISO timestamp or as free text straight from
+// the voice agent ("Sunday morning"). Timestamps render as "28th July 10 AM"
+// in IST — minutes shown only when non-zero; unparseable text passes through.
+export function fmtVisitWhen(text: string | null | undefined, iso?: string | null): string {
+  const src = text ?? iso;
+  if (!src) return "";
+  const d = new Date(src);
+  if (isNaN(d.getTime())) return text ?? "";
+  const parts = Object.fromEntries(
+    new Intl.DateTimeFormat("en-GB", {
+      timeZone: "Asia/Kolkata",
+      day: "numeric",
+      month: "long",
+      hour: "numeric",
+      minute: "numeric",
+      hour12: true,
+    })
+      .formatToParts(d)
+      .map((p) => [p.type, p.value]),
+  );
+  const day = Number(parts.day);
+  const suffix =
+    day % 100 >= 11 && day % 100 <= 13 ? "th" : ["th", "st", "nd", "rd"][day % 10] ?? "th";
+  const period = (parts.dayPeriod ?? "").toUpperCase();
+  const minutes = Number(parts.minute);
+  const time = minutes === 0 ? `${parts.hour} ${period}` : `${parts.hour}:${String(minutes).padStart(2, "0")} ${period}`;
+  return `${day}${suffix} ${parts.month} ${time}`;
+}
+
 export function fmtTime(ts: string | Date): string {
   const d = typeof ts === "string" ? new Date(ts) : ts;
   return d.toLocaleTimeString("en-IN", {

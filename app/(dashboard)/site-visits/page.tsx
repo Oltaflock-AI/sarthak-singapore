@@ -4,7 +4,7 @@ import { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { TableSkeleton } from "@/components/TableSkeleton";
-import { timeAgo, initials } from "@/lib/format";
+import { timeAgo, initials, fmtVisitWhen } from "@/lib/format";
 import { useAutoRefresh } from "@/lib/data";
 
 type SiteVisit = {
@@ -89,7 +89,7 @@ export default function SiteVisitsPage() {
                   </Td>
                   <Td><span className="num" style={{ fontSize: 12 }}>{v.lead_phone}</span></Td>
                   <Td>{v.project ?? "—"}</Td>
-                  <Td>{v.scheduled_for_text ?? (v.scheduled_for ? new Date(v.scheduled_for).toLocaleString() : "—")}</Td>
+                  <Td>{fmtVisitWhen(v.scheduled_for_text, v.scheduled_for) || "—"}</Td>
                   <Td><StatusPill status={v.status} /></Td>
                   <Td><span style={{ fontSize: 11, color: "var(--muted)" }}>{timeAgo(v.created_at)}</span></Td>
                   <Td>

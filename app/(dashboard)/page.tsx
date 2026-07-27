@@ -4,6 +4,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import Script from "next/script";
 import Link from "next/link";
 import { useAutoRefresh } from "@/lib/data";
+import { fmtVisitWhen } from "@/lib/format";
 import { PageHeader } from "@/components/PageHeader";
 import { KpiCard } from "@/components/KpiCard";
 
@@ -460,7 +461,7 @@ export default function Overview() {
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{v.lead_name ?? v.lead_phone}</div>
                       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                        {v.project ?? "Project not set"} · {v.scheduled_for_text ?? "Time not set"}
+                        {v.project ?? "Project not set"} · {fmtVisitWhen(v.scheduled_for_text) || "Time not set"}
                       </div>
                     </div>
                     <span style={{ fontSize: 10, color: v.status === "confirmed" ? "var(--gold)" : "var(--warm)", border: `1px solid ${v.status === "confirmed" ? "var(--gold)" : "var(--warm)"}`, padding: "2px 7px", borderRadius: 10, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{v.status}</span>
