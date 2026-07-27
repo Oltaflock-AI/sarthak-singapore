@@ -201,12 +201,29 @@ breaks call recording. Idempotent per call via `analysis` flags.
 
 | Trigger                         | Template                        | Recipient(s)              | Body vars                                   |
 |---------------------------------|---------------------------------|---------------------------|---------------------------------------------|
-| Warm **transfer** to a human    | `lead_transfer_alert`           | sales (`WHATSAPP_HANDOFF_MIRACLE`) | name, phone, project, reason, budget, timeline |
-| **Site visit booked** (Cal.com) | `ai_ssg_site_visit_booked`      | sales                     | lead, phone, project, when, status          |
+| Warm **transfer** to a human    | `lead_transfer_alert`           | sales, by project (`WHATSAPP_HANDOFF_*`) | name, phone, project, reason, budget, timeline |
+| **Site visit booked** (Cal.com) | `ai_ssg_site_visit_booked`      | sales owner, by project   | lead, phone, project, when, status          |
 | **Site visit booked** (Cal.com) | `aiclient_ssg_sitevisit_booked` | the **client** (lead's #) | name, project, when, team member, contact   |
 
-Site-visit member name/contact shown to the client come from `SITEVISIT_SALES_NAME` /
-`SITEVISIT_SALES_CONTACT` (fall back to the handoff number).
+Both templates carry a `project` body var, so one approved template serves all three
+properties — adding a property needs no Meta re-approval.
+
+### Site-visit sales owner (per project)
+
+`siteVisitOwner()` in the webhook routes the booking alert and decides the name +
+number the client is told to expect:
+
+| Project                | Owner    | Number         | Env overrides                                                                        |
+|------------------------|----------|----------------|--------------------------------------------------------------------------------------|
+| Singapore Miracle      | (env)    | (env)          | `WHATSAPP_SITEVISIT_SALES` → `WHATSAPP_HANDOFF_MIRACLE` → `WHATSAPP_HANDOFF_DEFAULT`; `SITEVISIT_SALES_NAME` / `SITEVISIT_SALES_CONTACT` |
+| Singapore One Street   | Priyanka | `917471144333` | `WHATSAPP_SITEVISIT_SALES_ONE_STREET` → `WHATSAPP_HANDOFF_ONE_STREET`; `SITEVISIT_SALES_NAME_ONE_STREET` / `SITEVISIT_SALES_CONTACT_ONE_STREET` |
+| The Grand Virasat      | Sunita   | `919644325000` | `WHATSAPP_SITEVISIT_SALES_VIRASAT` → `WHATSAPP_HANDOFF_VIRASAT`; `SITEVISIT_SALES_NAME_VIRASAT` / `SITEVISIT_SALES_CONTACT_VIRASAT` |
+
+Non-Miracle numbers are **pinned in code** with the env override on top — a missing
+secret can never silently reroute a One Street / Virasat booking back to Miracle.
+Project comes from the **agent id** (`SARTHAK_AGENTS`), never the transcript, so
+routing can't drift with what the caller says. If a project has no client-facing
+contact configured, the client is given the owner's own number.
 
 ### Approved template copy
 
@@ -322,7 +339,13 @@ SUPABASE_URL= / SUPABASE_SERVICE_ROLE_KEY=
 ELEVENLABS_WEBHOOK_SECRET=     # wsec_… — per-account; verifies post-call webhook
 INTERAKT_API_KEY=              # WhatsApp BSP (Basic auth)
 WHATSAPP_HANDOFF_MIRACLE=      # sales WhatsApp # (e.g. 917471185956)
+WHATSAPP_HANDOFF_ONE_STREET= / WHATSAPP_HANDOFF_VIRASAT=   # transfer alerts, per project
 SITEVISIT_SALES_NAME= / SITEVISIT_SALES_CONTACT=   # optional — shown to the client
+# Site-visit owner overrides — One Street (Priyanka) + Virasat (Sunita) are
+# pinned in code, so these are only needed to change a number/name:
+WHATSAPP_SITEVISIT_SALES_ONE_STREET= / WHATSAPP_SITEVISIT_SALES_VIRASAT=
+SITEVISIT_SALES_NAME_ONE_STREET= / SITEVISIT_SALES_NAME_VIRASAT=
+SITEVISIT_SALES_CONTACT_ONE_STREET= / SITEVISIT_SALES_CONTACT_VIRASAT=
 VOBIZ_AUTH_TOKEN= / VOBIZ_CALLBACK_URL=
 ```
 

@@ -256,31 +256,68 @@ async function sendInteraktHandoff(p: {
   );
 }
 
+// Site-visit sales owner per project: who gets the booking alert, and the name
+// + number the client is told to expect. One owner per property.
+//
+// Non-Miracle numbers are pinned in code with an env override on top, so the
+// routing works without a secrets round-trip and a stale/missing secret can
+// never silently reroute a booking back to Miracle. Miracle keeps its original
+// env chain (WHATSAPP_SITEVISIT_SALES → WHATSAPP_HANDOFF_MIRACLE → DEFAULT).
+function siteVisitOwner(project: string): { to: string; name: string; contact: string } {
+  const miracleTo =
+    Deno.env.get("WHATSAPP_SITEVISIT_SALES") ??
+    Deno.env.get("WHATSAPP_HANDOFF_MIRACLE") ??
+    Deno.env.get("WHATSAPP_HANDOFF_DEFAULT") ??
+    "";
+  const miracle = {
+    to: miracleTo,
+    name: Deno.env.get("SITEVISIT_SALES_NAME") ?? "Sarthak Singapore team",
+    contact: Deno.env.get("SITEVISIT_SALES_CONTACT") ?? miracleTo,
+  };
+
+  const byProject: Record<string, { to: string; name: string; contact?: string }> = {
+    "Singapore Miracle": miracle,
+    "Singapore One Street": {
+      to:
+        Deno.env.get("WHATSAPP_SITEVISIT_SALES_ONE_STREET") ??
+        Deno.env.get("WHATSAPP_HANDOFF_ONE_STREET") ??
+        "917471144333",
+      name: Deno.env.get("SITEVISIT_SALES_NAME_ONE_STREET") ?? "Priyanka",
+      contact: Deno.env.get("SITEVISIT_SALES_CONTACT_ONE_STREET"),
+    },
+    "The Grand Virasat": {
+      to:
+        Deno.env.get("WHATSAPP_SITEVISIT_SALES_VIRASAT") ??
+        Deno.env.get("WHATSAPP_HANDOFF_VIRASAT") ??
+        "919644325000",
+      name: Deno.env.get("SITEVISIT_SALES_NAME_VIRASAT") ?? "Sunita",
+      contact: Deno.env.get("SITEVISIT_SALES_CONTACT_VIRASAT"),
+    },
+  };
+
+  const o = byProject[project];
+  if (!o) return miracle;
+  // The client is pointed at the same owner unless an explicit client-facing
+  // contact is configured for that project.
+  return { to: o.to, name: o.name, contact: o.contact || o.to };
+}
+
 // On a CONFIRMED site-visit booking (real cal.com uid), WhatsApp BOTH parties,
 // each with its own approved template:
 //   • sales team → ai_ssg_site_visit_booked      (Lead, Phone, Project, When, Status)
 //   • the client → aiclient_ssg_sitevisit_booked (Name, Project, When, Member, Contact)
 // The client is messaged on their own lead phone; the sales recipient and the
-// "team member" name/contact shown to the client come from env (falling back to
-// the existing handoff number). Non-fatal.
+// "team member" name/contact shown to the client come from siteVisitOwner().
+// Both templates already carry a `project` body var, so one approved template
+// serves every property. Non-fatal.
 async function sendSiteVisitWhatsApps(p: {
   name: string; phone: string; project: string; whenText: string;
 }): Promise<void> {
-  const salesTo =
-    Deno.env.get("WHATSAPP_SITEVISIT_SALES") ??
-    Deno.env.get("WHATSAPP_HANDOFF_MIRACLE") ??
-    Deno.env.get("WHATSAPP_HANDOFF_DEFAULT") ??
-    "";
-  const memberName = Deno.env.get("SITEVISIT_SALES_NAME") ?? "Sarthak Singapore team";
-  const memberContact =
-    Deno.env.get("SITEVISIT_SALES_CONTACT") ??
-    Deno.env.get("WHATSAPP_SITEVISIT_SALES") ??
-    Deno.env.get("WHATSAPP_HANDOFF_MIRACLE") ??
-    "";
+  const owner = siteVisitOwner(p.project);
 
   // 1) Sales team notification.
   await sendInteraktMessage(
-    salesTo,
+    owner.to,
     Deno.env.get("WHATSAPP_SITEVISIT_SALES_TEMPLATE") ?? "ai_ssg_site_visit_booked",
     [dash(p.name), dispPhone(p.phone), dash(p.project), dash(p.whenText), "Confirmed"],
     "sitevisit-sales",
@@ -290,7 +327,7 @@ async function sendSiteVisitWhatsApps(p: {
   await sendInteraktMessage(
     p.phone,
     Deno.env.get("WHATSAPP_SITEVISIT_CLIENT_TEMPLATE") ?? "aiclient_ssg_sitevisit_booked",
-    [dash(p.name), dash(p.project), dash(p.whenText), dash(memberName), dispPhone(memberContact)],
+    [dash(p.name), dash(p.project), dash(p.whenText), dash(owner.name), dispPhone(owner.contact)],
     "sitevisit-client",
   );
 }
