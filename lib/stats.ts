@@ -14,7 +14,7 @@ export interface CallStats {
   answered_calls: number;
   missed_calls: number;
   answer_rate: number | null;
-  reached_leads: number;
+  conversed_leads: number;
   avg_talk_seconds: number | null;
   total_talk_seconds: number;
   today_calls: number;
@@ -46,6 +46,8 @@ function phoneKey(phone: string): string {
 export interface DialRow {
   status: string;
   attempts: number | null;
+  lead_phone: string | null;
+  project: string | null;
 }
 
 export interface DialStats {
@@ -54,6 +56,15 @@ export interface DialStats {
   answer_rate: number | null;
   dials_today: number;
   answered_today: number;
+  // Distinct PEOPLE, not queue rows. The campaign targets Zoho leads tagged
+  // Lead_Status = "Not Answer", and those leads are exactly what the sync
+  // enqueues — so the queue, deduped by phone, IS the no-answer population.
+  // Counting rows instead would inflate it: a sync bug re-queued the same lead
+  // up to 20 times, and rows also multiply on retry campaigns.
+  targeted_leads: number;
+  waiting_leads: number;
+  reached_leads: number;
+  by_project: { project: string; leads: number; waiting: number; reached: number }[];
 }
 
 export function summariseDials(
@@ -63,17 +74,47 @@ export function summariseDials(
 ): DialStats {
   let attempts = 0;
   let answered = 0;
+  const all = new Set<string>();
+  const waiting = new Set<string>();
+  const reached = new Set<string>();
+  const projects = new Map<string, { leads: Set<string>; waiting: Set<string>; reached: Set<string> }>();
+
   for (const r of rows) {
     attempts += r.attempts ?? 0;
     // One connect per row at most: the dialer stops retrying once it completes.
     if (r.status === "completed") answered++;
+
+    if (!r.lead_phone) continue;
+    const key = phoneKey(r.lead_phone);
+    const project = r.project ?? "Unassigned";
+    const p = projects.get(project) ?? { leads: new Set(), waiting: new Set(), reached: new Set() };
+    projects.set(project, p);
+
+    all.add(key);
+    p.leads.add(key);
+    if (r.status === "queued" || r.status === "dialing") { waiting.add(key); p.waiting.add(key); }
+    if (r.status === "completed") { reached.add(key); p.reached.add(key); }
   }
+
   return {
     dial_attempts: attempts,
     answered_dials: answered,
     answer_rate: attempts > 0 ? answered / attempts : null,
     dials_today: dialsToday,
     answered_today: answeredToday,
+    targeted_leads: all.size,
+    // A lead that was reached is no longer waiting, even if a stale duplicate
+    // row still sits in the queue for it.
+    waiting_leads: [...waiting].filter((k) => !reached.has(k)).length,
+    reached_leads: reached.size,
+    by_project: [...projects.entries()]
+      .map(([project, p]) => ({
+        project,
+        leads: p.leads.size,
+        waiting: [...p.waiting].filter((k) => !p.reached.has(k)).length,
+        reached: p.reached.size,
+      }))
+      .sort((a, b) => b.leads - a.leads),
   };
 }
 
@@ -104,7 +145,7 @@ export function summariseCalls(rows: CallStatRow[], startOfToday: Date): CallSta
     answered_calls: answered,
     missed_calls: total - answered,
     answer_rate: total > 0 ? answered / total : null,
-    reached_leads: reached.size,
+    conversed_leads: reached.size,
     avg_talk_seconds: answered > 0 ? Math.round(talkSecs / answered) : null,
     total_talk_seconds: talkSecs,
     today_calls: todayTotal,

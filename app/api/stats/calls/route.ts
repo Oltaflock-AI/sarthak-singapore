@@ -75,7 +75,7 @@ export async function GET() {
     for (let from = 0; ; from += PAGE) {
       const { data, error } = await supabase
         .from("call_queue")
-        .select("status,attempts")
+        .select("status,attempts,lead_phone,project")
         .range(from, from + PAGE - 1);
       if (error) throw new Error(error.message);
       const page = (data ?? []) as DialRow[];

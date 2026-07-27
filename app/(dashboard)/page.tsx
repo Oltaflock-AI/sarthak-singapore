@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Script from "next/script";
 import Link from "next/link";
-import { useLiveData, useAutoRefresh, isMissedCall } from "@/lib/data";
+import { useAutoRefresh } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { KpiCard } from "@/components/KpiCard";
 
@@ -50,7 +50,7 @@ type CallStats = {
   answered_calls: number;
   missed_calls: number;
   answer_rate: number | null;
-  reached_leads: number;
+  conversed_leads: number;
   avg_talk_seconds: number | null;
   total_talk_seconds: number;
   today_calls: number;
@@ -66,6 +66,12 @@ type CallStats = {
   answered_dials: number;
   dials_today: number;
   answered_today: number;
+  // The campaign population: Zoho leads tagged Lead_Status = "Not Answer",
+  // counted as distinct people rather than queue rows.
+  targeted_leads: number;
+  waiting_leads: number;
+  reached_leads: number;
+  by_project: { project: string; leads: number; waiting: number; reached: number }[];
 };
 
 // 1_234_567 → "1.23M", 148_200 → "148k". Keeps the KPI on one line.
@@ -101,8 +107,6 @@ const ICONS = {
 };
 
 export default function Overview() {
-  const { calls } = useLiveData();
-  const connectedCalls = calls.filter((c) => !isMissedCall(c)).length;
   const [leads, setLeads] = useState<Lead[]>(() => cachedLeads);
   const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
   const [credits, setCredits] = useState<CreditUsage | null>(() => cachedCredits);
@@ -190,12 +194,6 @@ export default function Overview() {
   const upcomingVisits = useMemo(() =>
     visits.filter((v) => v.status === "pending" || v.status === "confirmed").slice(0, 6),
   [visits]);
-
-  const todayLeads = useMemo(() => {
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return leads.filter((l) => new Date(l.created_at) >= today).length;
-  }, [leads]);
 
   const priorityLeads = useMemo(() => {
     const terminal = new Set(["booked", "converted", "lost"]);
@@ -298,11 +296,18 @@ export default function Overview() {
       {/* Primary KPIs */}
       <div className="kpi-grid">
         <KpiCard
-          label="Total Leads"
-          value={metrics.total.toLocaleString("en-IN")}
-          sub={`+${todayLeads} today · ${connectedCalls.toLocaleString("en-IN")} connected calls`}
+          label="No-Answer Leads"
+          value={stats ? stats.targeted_leads.toLocaleString("en-IN") : "0"}
+          sub={
+            stats
+              ? `${stats.reached_leads.toLocaleString("en-IN")} reached · ${stats.waiting_leads.toLocaleString("en-IN")} still to call`
+              : ""
+          }
           icon={ICONS.leads}
-          loading={!leadsLoaded}
+          loading={!stats}
+          error={stats ? null : statsError}
+          progress={stats && stats.targeted_leads > 0 ? stats.reached_leads / stats.targeted_leads : undefined}
+          progressColor="#c9a85a"
         />
         <KpiCard
           label="Site Visits Booked"
@@ -341,12 +346,13 @@ export default function Overview() {
         />
         <KpiCard
           label="Dial Queue"
-          value={stats ? (stats.queued_calls + stats.dialing_calls).toLocaleString("en-IN") : "0"}
+          // Distinct leads still to call — NOT queue rows, which duplicate.
+          value={stats ? stats.waiting_leads.toLocaleString("en-IN") : "0"}
           sub={
             stats
-              ? stats.queued_calls + stats.dialing_calls === 0
-                ? `Queue empty · ${stats.running_batches} running campaign${stats.running_batches === 1 ? "" : "s"}`
-                : `${stats.dialing_calls} dialling now · ${stats.queued_calls.toLocaleString("en-IN")} waiting · ${stats.running_batches} campaign${stats.running_batches === 1 ? "" : "s"}`
+              ? stats.waiting_leads === 0
+                ? `Everyone called · ${stats.running_batches} running campaign${stats.running_batches === 1 ? "" : "s"}`
+                : `${stats.dialing_calls} dialling now · ${stats.running_batches} campaign${stats.running_batches === 1 ? "" : "s"} running`
               : ""
           }
           icon={ICONS.queue}
@@ -421,6 +427,44 @@ export default function Overview() {
                       background: "var(--gold-soft)", border: "1px solid var(--gold-dim)",
                       color: "var(--gold-2)", fontSize: 11.5, fontWeight: 600,
                     }}>☎ Call</a>
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      </div>
+
+      {/* Campaign progress — the Zoho "Not Answer" population, per property */}
+      <div className="panel" style={{ marginBottom: 22 }}>
+        <div className="panel-head">
+          <div className="panel-title">Campaigns · Zoho &ldquo;Not Answer&rdquo; leads</div>
+          <div className="panel-sub num">
+            {stats ? `${stats.reached_leads.toLocaleString("en-IN")} of ${stats.targeted_leads.toLocaleString("en-IN")} reached` : ""}
+          </div>
+        </div>
+        <div className="panel-body">
+          {!stats ? (
+            <div className="skeleton" style={{ height: 96 }} />
+          ) : stats.by_project.length === 0 ? (
+            <div style={{ padding: 8, color: "var(--muted)", fontSize: 12, textAlign: "center" }}>
+              No campaign leads synced yet — the Zoho sync queues them as they get tagged.
+            </div>
+          ) : (
+            <div style={{ display: "grid", gap: 12 }}>
+              {stats.by_project.map((p) => {
+                const pct = p.leads > 0 ? Math.round((p.reached / p.leads) * 100) : 0;
+                return (
+                  <div key={p.project}>
+                    <div style={{ display: "flex", justifyContent: "space-between", alignItems: "baseline", marginBottom: 6, gap: 10 }}>
+                      <span style={{ fontSize: 12.5, fontWeight: 600 }}>{p.project}</span>
+                      <span style={{ fontSize: 11.5, color: "var(--muted)" }} className="num">
+                        {p.reached.toLocaleString("en-IN")} reached · {p.waiting.toLocaleString("en-IN")} to call · {p.leads.toLocaleString("en-IN")} leads
+                      </span>
+                    </div>
+                    <div style={{ height: 6, background: "var(--bg-2)", borderRadius: 999, overflow: "hidden" }}>
+                      <div style={{ height: "100%", width: `${pct}%`, background: "var(--gold)", borderRadius: 999, transition: "width .4s ease" }} />
+                    </div>
                   </div>
                 );
               })}

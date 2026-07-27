@@ -108,8 +108,25 @@ async function sync(agentPhoneNumberId: string | undefined) {
   // 2) Dedup against every phone already in the queue (any status/batch), so a
   //    lead is never dialed twice across syncs; `seen` also blocks a
   //    multi-project lead from landing in two campaigns this run.
-  const { data: existing } = await supabase.from("call_queue").select("lead_phone");
-  const seen = new Set((existing ?? []).map((r) => phoneKey(String(r.lead_phone))));
+  //
+  //    MUST be paged. PostgREST caps a response at 1000 rows, so the old
+  //    unpaged select saw only the first 1000 phones once the queue grew past
+  //    that — every lead beyond it looked new and was re-inserted on each
+  //    6-hourly sync. By 2026-07-27 that had put 4,495 rows in the queue for
+  //    1,153 distinct leads, with one number queued 20 times, and each copy
+  //    dials independently.
+  const seen = new Set<string>();
+  const PAGE = 1000;
+  for (let from = 0; ; from += PAGE) {
+    const { data, error } = await supabase
+      .from("call_queue")
+      .select("lead_phone")
+      .range(from, from + PAGE - 1);
+    if (error) throw new Error(`dedup scan failed: ${error.message}`);
+    const page = data ?? [];
+    for (const r of page) seen.add(phoneKey(String(r.lead_phone)));
+    if (page.length < PAGE) break;
+  }
 
   const perCampaign: Record<string, { lead_name: string | null; lead_phone: string; dynamic_vars: Record<string, string> }[]> = {};
   for (const c of CAMPAIGNS) perCampaign[c.label] = [];
