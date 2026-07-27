@@ -43,6 +43,19 @@ type CreditUsage = {
   warning: string | null;
 };
 
+// Whole-table call stats (/api/stats/calls) — the /api/calls feed is capped at
+// 500 rows, so pickup rate has to be counted server-side to be true.
+type CallStats = {
+  total_calls: number;
+  answered_calls: number;
+  missed_calls: number;
+  answer_rate: number | null;
+  reached_leads: number;
+  avg_talk_seconds: number | null;
+  today_calls: number;
+  today_answered: number;
+};
+
 // 1_234_567 → "1.23M", 148_200 → "148k". Keeps the KPI on one line.
 function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 2)}M`;
@@ -56,12 +69,14 @@ function compact(n: number): string {
 let cachedLeads: Lead[] = [];
 let cachedVisits: Visit[] = [];
 let cachedCredits: CreditUsage | null = null;
+let cachedStats: CallStats | null = null;
 
 const ICONS = {
   leads: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="7" r="3" /><path d="M3.5 17a6.5 6.5 0 0 1 13 0" /></svg>,
   qualified: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M5 10l3.5 3.5L15 6.5" /></svg>,
   visits: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.6" /><path d="M3 8.5h14M7 3v3M13 3v3" /></svg>,
   conv: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M3 17l5-5 3 3 6-7" /><path d="M14 8h3v3" /></svg>,
+  pickup: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4.2 4h3l1.2 3-1.6 1.2a9 9 0 0 0 4 4L12 10.6l3 1.2v3a1.2 1.2 0 0 1-1.3 1.2A11.5 11.5 0 0 1 3 5.3 1.2 1.2 0 0 1 4.2 4Z" /></svg>,
   credits: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="6.8" /><path d="M7.8 7h4.4M7.8 9.6h4.4M11 7c0 1.7-1.4 2.6-3.2 2.6L12 14" /></svg>,
 };
 
@@ -71,17 +86,20 @@ export default function Overview() {
   const [leads, setLeads] = useState<Lead[]>(() => cachedLeads);
   const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
   const [credits, setCredits] = useState<CreditUsage | null>(() => cachedCredits);
+  const [stats, setStats] = useState<CallStats | null>(() => cachedStats);
   const chartRefs = useRef<{ source: unknown; status: unknown }>({ source: null, status: null });
 
   useEffect(() => {
     const fetchAll = async () => {
       try {
-        const [l, v] = await Promise.all([
+        const [l, v, s] = await Promise.all([
           fetch("/api/leads", { cache: "no-store" }).then((r) => r.json()),
           fetch("/api/site-visits", { cache: "no-store" }).then((r) => r.json()),
+          fetch("/api/stats/calls", { cache: "no-store" }).then((r) => r.json()).catch(() => null),
         ]);
         if (Array.isArray(l)) { cachedLeads = l; setLeads(l); }
         if (Array.isArray(v)) { cachedVisits = v; setVisits(v); }
+        if (s && typeof s.total_calls === "number") { cachedStats = s; setStats(s); }
       } catch (err) {
         console.error("[overview] fetch failed", err);
       }
@@ -154,7 +172,22 @@ export default function Overview() {
       .slice(0, 6);
   }, [leads]);
 
-  const conversionRate = metrics.total > 0 ? Math.round((metrics.booked + metrics.converted) / metrics.total * 100) : 0;
+  // Conversion = site visits booked ÷ leads we actually SPOKE TO.
+  //
+  // It used to divide by every lead in the table. That table is fed by the Zoho
+  // sync, so the denominator included thousands of leads the dialer had not
+  // reached yet (and never-answered numbers) — the rate read near-zero, drifted
+  // down every time a sync ran, and was really just the "Site Visits Booked"
+  // card divided by "Total Leads". Dividing by reached leads answers the
+  // question the sales team actually asks: of the people the agent got on the
+  // phone, how many booked a visit?
+  const visitsBooked = metrics.booked + metrics.converted;
+  const reachedLeads = stats?.reached_leads ?? 0;
+  // Capped: a visit can be booked for a lead with no answered call (inbound or
+  // manual entry), which would otherwise push this past 100%.
+  const conversionRate = reachedLeads > 0 ? Math.min(100, Math.round((visitsBooked / reachedLeads) * 100)) : 0;
+  const conversionOfAll = metrics.total > 0 ? Math.round((visitsBooked / metrics.total) * 100) : 0;
+  const answerRate = stats?.answer_rate != null ? Math.round(stats.answer_rate * 100) : null;
   const qualificationRate = metrics.total > 0 ? Math.round((metrics.qualified + metrics.booked + metrics.converted) / metrics.total * 100) : 0;
   const avgScore = metrics.total > 0 ? Math.round(leads.reduce((a, l) => a + (l.lead_score ?? 0), 0) / metrics.total) : 0;
 
@@ -249,9 +282,32 @@ export default function Overview() {
       {/* Primary KPIs */}
       <div className="kpi-grid">
         <KpiCard label="Total Leads" value={metrics.total} sub={`+${todayLeads} today · ${connectedCalls} voice calls`} icon={ICONS.leads} />
-        <KpiCard label="Qualified" value={metrics.qualified + metrics.booked + metrics.converted} sub={`${qualificationRate}% qualification rate`} icon={ICONS.qualified} />
+        <KpiCard label="Qualified" value={metrics.qualified + metrics.booked + metrics.converted} sub={`${qualificationRate}% of all leads · avg score ${avgScore}`} icon={ICONS.qualified} />
         <KpiCard label="Site Visits Booked" value={metrics.booked + metrics.converted} sub={`${todayBookings.length} booked today`} icon={ICONS.visits} />
-        <KpiCard label="Conversion Rate" value={`${conversionRate}%`} sub={`${metrics.converted} converted · avg score ${avgScore}`} icon={ICONS.conv} />
+        <KpiCard
+          label="Answer Rate"
+          value={answerRate == null ? "—" : `${answerRate}%`}
+          sub={
+            stats
+              ? `${stats.answered_calls.toLocaleString("en-IN")} picked up of ${stats.total_calls.toLocaleString("en-IN")} dialled · ${stats.today_answered}/${stats.today_calls} today`
+              : "loading…"
+          }
+          icon={ICONS.pickup}
+          progress={stats?.answer_rate ?? undefined}
+          progressColor={
+            answerRate == null ? undefined : answerRate >= 40 ? "#22c55e" : answerRate >= 20 ? "#f59e0b" : "#ef4444"
+          }
+        />
+        <KpiCard
+          label="Conversion Rate"
+          value={stats ? `${conversionRate}%` : "—"}
+          sub={
+            stats
+              ? `${visitsBooked} visits from ${reachedLeads.toLocaleString("en-IN")} leads reached · ${conversionOfAll}% of all leads`
+              : "loading…"
+          }
+          icon={ICONS.conv}
+        />
         <KpiCard
           label="ElevenLabs Credits"
           value={
@@ -383,7 +439,7 @@ export default function Overview() {
         <div className="panel">
           <div className="panel-head">
             <div className="panel-title">Funnel</div>
-            <div className="panel-sub num">{conversionRate}% conv</div>
+            <div className="panel-sub num">{conversionRate}% of reached leads book a visit</div>
           </div>
           <div className="panel-body"><div style={{ height: 240 }}><canvas id="statusChart" /></div></div>
         </div>
