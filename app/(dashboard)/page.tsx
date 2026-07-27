@@ -1,7 +1,6 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import Script from "next/script";
+import { useMemo, useState } from "react";
 import Link from "next/link";
 import { useAutoRefresh } from "@/lib/data";
 import { fmtVisitWhen } from "@/lib/format";
@@ -118,7 +117,6 @@ export default function Overview() {
   const [leadsLoaded, setLeadsLoaded] = useState(() => cachedLeads.length > 0);
   const [statsError, setStatsError] = useState<string | null>(null);
   const [creditsError, setCreditsError] = useState<string | null>(null);
-  const chartRefs = useRef<{ source: unknown; status: unknown }>({ source: null, status: null });
 
   useAutoRefresh(async () => {
     const [l, v] = await Promise.all([
@@ -171,7 +169,6 @@ export default function Overview() {
   const metrics = useMemo(() => {
     const total = leads.length;
     let hot = 0, warm = 0, cold = 0, qualified = 0, booked = 0, converted = 0, lost = 0;
-    const sourceCount = new Map<string, number>();
     for (const l of leads) {
       const s = (l.score_label ?? "WARM").toUpperCase();
       if (s === "HOT") hot++;
@@ -181,10 +178,8 @@ export default function Overview() {
       else if (l.status === "booked") booked++;
       else if (l.status === "converted") converted++;
       else if (l.status === "lost") lost++;
-      const src = l.source ?? "unknown";
-      sourceCount.set(src, (sourceCount.get(src) ?? 0) + 1);
     }
-    return { total, hot, warm, cold, qualified, booked, converted, lost, sourceCount };
+    return { total, hot, warm, cold, qualified, booked, converted, lost };
   }, [leads]);
 
   const todayBookings = useMemo(() => {
@@ -199,92 +194,8 @@ export default function Overview() {
 
   const answerRate = stats?.answer_rate != null ? Math.round(stats.answer_rate * 100) : null;
 
-  const renderCharts = () => {
-    // @ts-expect-error CDN global
-    if (typeof window === "undefined" || typeof window.Chart === "undefined") return;
-    const sourceCtx = (document.getElementById("sourceChart") as HTMLCanvasElement)?.getContext("2d");
-    const statusCtx = (document.getElementById("statusChart") as HTMLCanvasElement)?.getContext("2d");
-    if (!sourceCtx || !statusCtx) return;
-
-    // Read live theme tokens so charts adapt to light/dark.
-    const css = getComputedStyle(document.documentElement);
-    const tok = (n: string) => css.getPropertyValue(n).trim();
-    const cPanel = tok("--panel"), cText = tok("--text"), cText2 = tok("--text-2"),
-      cMuted = tok("--muted"), cLine = tok("--line");
-
-    // Cleanup
-    // @ts-expect-error instance
-    chartRefs.current.source?.destroy?.();
-    // @ts-expect-error instance
-    chartRefs.current.status?.destroy?.();
-
-    const sourceEntries = Array.from(metrics.sourceCount.entries()).sort((a, b) => b[1] - a[1]);
-
-    const sLabels = sourceEntries.length ? sourceEntries.map(([k, v]) => `${k} · ${v}`) : ["No leads yet"];
-    const sValues = sourceEntries.length ? sourceEntries.map(([, v]) => v) : [1];
-
-    // @ts-expect-error CDN
-    chartRefs.current.source = new window.Chart(sourceCtx, {
-      type: "doughnut",
-      data: { labels: sLabels, datasets: [{ data: sValues, backgroundColor: ["#c9a85a", "#8a7440", "#6e5d33", "#544626", "#3a2f1a"], borderWidth: 0, hoverOffset: 6 }] },
-      options: {
-        cutout: "68%",
-        plugins: {
-          legend: { position: "right", labels: { color: cText2, font: { size: 12 }, padding: 14, boxWidth: 10, boxHeight: 10, usePointStyle: true } },
-          tooltip: { backgroundColor: cPanel, titleColor: cText, bodyColor: cText2, borderColor: cLine, borderWidth: 1, padding: 10, cornerRadius: 6 },
-        },
-        maintainAspectRatio: false,
-        animation: { duration: 600 },
-      },
-    });
-
-    // Funnel: new → qualified → booked → converted
-    const funnelLabels = ["New", "Qualified", "Booked", "Converted"];
-    const funnelValues = [
-      metrics.total,
-      metrics.qualified + metrics.booked + metrics.converted,
-      metrics.booked + metrics.converted,
-      metrics.converted,
-    ];
-    // @ts-expect-error CDN
-    chartRefs.current.status = new window.Chart(statusCtx, {
-      type: "bar",
-      data: { labels: funnelLabels, datasets: [{ data: funnelValues, backgroundColor: ["#7d7665", "#b8975a", "#c9a85a", "#e8c87a"], borderRadius: 6, barThickness: 38 }] },
-      options: {
-        plugins: { legend: { display: false }, tooltip: { backgroundColor: cPanel, titleColor: cText, bodyColor: cText2, borderColor: cLine, borderWidth: 1, padding: 10, cornerRadius: 6, displayColors: false } },
-        scales: {
-          y: { grid: { color: cLine }, ticks: { color: cMuted, font: { size: 11 }, precision: 0 }, border: { display: false } },
-          x: { grid: { display: false }, ticks: { color: cText2, font: { size: 12, weight: 500 } }, border: { display: false } },
-        },
-        maintainAspectRatio: false,
-        animation: { duration: 600 },
-      },
-    });
-  };
-
-  useEffect(() => {
-    // chart.js may have loaded on a previous mount — check the global directly
-    // rather than a per-mount ref so charts re-render on revisit.
-    // @ts-expect-error CDN global
-    if (typeof window !== "undefined" && window.Chart) {
-      renderCharts();
-    }
-    // Re-render with fresh tokens whenever the theme is toggled.
-    const onTheme = () => renderCharts();
-    window.addEventListener("themechange", onTheme);
-    return () => window.removeEventListener("themechange", onTheme);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [metrics]);
-
   return (
     <>
-      <Script
-        src="https://cdn.jsdelivr.net/npm/chart.js@4.4.0/dist/chart.umd.min.js"
-        strategy="afterInteractive"
-        onLoad={() => { renderCharts(); }}
-        onReady={() => { renderCharts(); }}
-      />
-
       <PageHeader title="Overview" subtitle="AI sales engine · live pipeline across all channels" />
 
       {/* Primary KPIs */}
@@ -470,24 +381,6 @@ export default function Overview() {
               </div>
             )}
           </div>
-        </div>
-      </div>
-
-      {/* Charts row */}
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 22 }}>
-        <div className="panel">
-          <div className="panel-head">
-            <div className="panel-title">Source Mix</div>
-            <div className="panel-sub">channels</div>
-          </div>
-          <div className="panel-body"><div style={{ height: 240 }}><canvas id="sourceChart" /></div></div>
-        </div>
-        <div className="panel">
-          <div className="panel-head">
-            <div className="panel-title">Funnel</div>
-            <div className="panel-sub num">{metrics.total.toLocaleString("en-IN")} leads</div>
-          </div>
-          <div className="panel-body"><div style={{ height: 240 }}><canvas id="statusChart" /></div></div>
         </div>
       </div>
 
