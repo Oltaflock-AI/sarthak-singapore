@@ -225,6 +225,31 @@ Project comes from the **agent id** (`SARTHAK_AGENTS`), never the transcript, so
 routing can't drift with what the caller says. If a project has no client-facing
 contact configured, the client is given the owner's own number.
 
+### Reminders + booking-send retry (`visit-reminders`)
+
+A second edge function, `supabase/functions/visit-reminders`, runs every 15 min
+via **pg_cron → pg_net** (job `visit-reminders`, see
+`supabase/migrations/20260727_site_visit_reminders.sql`). One pass over upcoming
+`site_visits` (status pending/confirmed):
+
+| Tier | When | Recipients |
+|------|------|------------|
+| booking retry | `booking_*_sent_at` NULL, visit <7 days old | whichever party's send never succeeded |
+| 24h reminder  | ≤24h out (skipped if booked <2h ago) | sales + client |
+| 3h reminder   | ≤3h out | sales + client |
+| 30m reminder  | ≤45m out | sales only |
+
+Each tier stamps a `*_sent_at` column on success — never double-sends.
+Reminders reuse the approved booking templates by default; set
+`WHATSAPP_SITEVISIT_REMINDER_SALES_TEMPLATE` / `_CLIENT_TEMPLATE` to switch to
+dedicated reminder copy without a redeploy. `POST …/visit-reminders?dry=1`
+previews planned sends without sending.
+
+The webhook stamps `sitevisit_whatsapp_sent` / `handoff_sent` only **after** a
+send actually succeeds (results recorded in `analysis.sitevisit_whatsapp_results`
+/ `analysis.handoff_result`), so a failure — e.g. an empty Interakt wallet — stays
+retryable instead of being silently marked sent.
+
 ### Approved template copy
 
 All templates are language **`en`** and pre-approved on the Interakt / Meta side.

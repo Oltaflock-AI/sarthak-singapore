@@ -255,14 +255,14 @@ async function sendInteraktMessage(
 // budget, timeline). Recipient by project — one manager per project as they grow.
 async function sendInteraktHandoff(p: {
   name: string; phone: string; project: string; reason: string; budget: string; timeline: string;
-}): Promise<void> {
+}): Promise<SendResult> {
   const byProject: Record<string, string | undefined> = {
     "Singapore Miracle": Deno.env.get("WHATSAPP_HANDOFF_MIRACLE"),
     "Singapore One Street": Deno.env.get("WHATSAPP_HANDOFF_ONE_STREET"),
     "The Grand Virasat": Deno.env.get("WHATSAPP_HANDOFF_VIRASAT"),
   };
   const to = byProject[p.project] ?? Deno.env.get("WHATSAPP_HANDOFF_DEFAULT") ?? "";
-  await sendInteraktMessage(
+  return await sendInteraktMessage(
     to,
     Deno.env.get("WHATSAPP_HANDOFF_TEMPLATE") ?? "lead_transfer_alert",
     [dash(p.name), dash(p.phone), dash(p.project), dash(p.reason), dash(p.budget), dash(p.timeline)],
@@ -579,8 +579,11 @@ Deno.serve(async (req) => {
     direction,
     agent_id: pick(data, ["agent_id"]),
     termination_reason: pick(metadata, ["termination_reason"]) || undefined,
-    handoff_sent: transferred || undefined,
-    sitevisit_whatsapp_sent: siteVisit || undefined,
+    // Sent-flags are stamped AFTER a send actually succeeds (see below) — the
+    // old stamp-on-upsert made a wallet-dead failure look sent and unretryable.
+    // Carry forward what a prior delivery already accomplished.
+    handoff_sent: alreadyHandedOff || undefined,
+    sitevisit_whatsapp_sent: alreadySiteVisitNotified || undefined,
   };
 
   const row: Record<string, unknown> = { call_id, source: "elevenlabs" };
@@ -609,8 +612,9 @@ Deno.serve(async (req) => {
   }
 
   // ── WhatsApp handoff brief to the sales team, only on a real transfer ──
+  let handoffResult: SendResult | null = null;
   if (transferred && !alreadyHandedOff) {
-    await sendInteraktHandoff({
+    handoffResult = await sendInteraktHandoff({
       name: String(lead_name ?? ""),
       phone: String(lead_phone ?? ""),
       project,
@@ -621,13 +625,33 @@ Deno.serve(async (req) => {
   }
 
   // ── Site-visit booked: WhatsApp both the sales team and the client ──
+  let svResults: { sales: SendResult; client: SendResult } | null = null;
   if (siteVisit && !alreadySiteVisitNotified) {
-    await sendSiteVisitWhatsApps({
+    svResults = await sendSiteVisitWhatsApps({
       name: String(lead_name ?? ""),
       phone: String(lead_phone ?? ""),
       project,
       whenText: formatWhenIST(visitWhen),
     });
+  }
+
+  // Stamp sent-flags from the actual outcomes, so a failed send stays
+  // retryable (webhook redelivery, or the visit-reminders booking-retry pass)
+  // while a succeeded one is never repeated. Results are recorded on the row
+  // so delivery is verifiable without edge-function log access.
+  if (handoffResult || svResults) {
+    const patched = { ...analysis };
+    if (handoffResult) {
+      patched.handoff_sent = handoffResult.ok || undefined;
+      patched.handoff_result = handoffResult;
+    }
+    if (svResults) {
+      patched.sitevisit_whatsapp_sent = (svResults.sales.ok || svResults.client.ok) || undefined;
+      patched.sitevisit_whatsapp_results = svResults;
+    }
+    const { error: flagErr } = await supabase
+      .from("calls").update({ analysis: patched }).eq("call_id", call_id);
+    if (flagErr) console.error("[elevenlabs-webhook] sent-flag update error", flagErr);
   }
 
   // ── Mirror into leads CRM (canonical +E.164, dedupes legacy unprefixed) ──
@@ -691,6 +715,10 @@ Deno.serve(async (req) => {
       if (project) visitRow.project = project;
       if (visitWhenIso) visitRow.scheduled_for = visitWhenIso;
       if (visitWhen) visitRow.scheduled_for_text = visitWhen;
+      // Per-party send stamps — visit-reminders retries whichever is missing.
+      // Only set on success; upsert leaves absent columns untouched on retry.
+      if (svResults?.sales.ok) visitRow.booking_sales_sent_at = new Date().toISOString();
+      if (svResults?.client.ok) visitRow.booking_client_sent_at = new Date().toISOString();
 
       const { error: visitErr } = await supabase
         .from("site_visits")
