@@ -5,8 +5,9 @@ import Link from "next/link";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
 import { ScoreBadge } from "@/components/ScoreBadge";
+import { TableSkeleton } from "@/components/TableSkeleton";
 import { timeAgo, initials, fmtDuration, fmtDateTime } from "@/lib/format";
-import { fetchCallsByPhone } from "@/lib/data";
+import { fetchCallsByPhone, useAutoRefresh } from "@/lib/data";
 
 type Lead = {
   id: string;
@@ -43,11 +44,7 @@ export default function LeadsPage() {
     setLoading(false);
   }
 
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 8000);
-    return () => clearInterval(id);
-  }, []);
+  useAutoRefresh(refresh, 8000);
 
   const filtered = useMemo(() => {
     let r = leads;
@@ -122,7 +119,7 @@ export default function LeadsPage() {
       {/* Lead grid */}
       <div className="panel" style={{ overflow: "hidden" }}>
         {loading && leads.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>Loading leads…</div>
+          <TableSkeleton rows={8} />
         ) : filtered.length === 0 ? (
           <EmptyState title="No leads match" hint={search ? "Try a different search" : "Leads will appear here as conversations come in"} />
         ) : (

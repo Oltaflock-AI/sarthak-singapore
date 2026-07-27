@@ -1,9 +1,11 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
 import { PageHeader } from "@/components/PageHeader";
 import { EmptyState } from "@/components/EmptyState";
+import { TableSkeleton } from "@/components/TableSkeleton";
 import { timeAgo, initials } from "@/lib/format";
+import { useAutoRefresh } from "@/lib/data";
 
 type SiteVisit = {
   id: string;
@@ -30,11 +32,7 @@ export default function SiteVisitsPage() {
     setLoading(false);
   }
 
-  useEffect(() => {
-    refresh();
-    const id = setInterval(refresh, 8000);
-    return () => clearInterval(id);
-  }, []);
+  useAutoRefresh(refresh, 8000);
 
   async function updateStatus(id: string, status: string) {
     await fetch("/api/site-visits", {
@@ -64,7 +62,7 @@ export default function SiteVisitsPage() {
 
       <div className="panel" style={{ overflow: "hidden" }}>
         {loading && visits.length === 0 ? (
-          <div style={{ padding: 40, textAlign: "center", color: "var(--muted)", fontSize: 13 }}>Loading…</div>
+          <TableSkeleton rows={6} />
         ) : visits.length === 0 ? (
           <EmptyState title="No site visits yet" hint="Visits booked on voice calls will appear here" />
         ) : (

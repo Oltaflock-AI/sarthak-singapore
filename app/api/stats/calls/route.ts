@@ -34,8 +34,34 @@ export async function GET() {
       if (page.length < PAGE) break;
     }
 
+    // Dialer workload. Header-only counts, so this stays cheap enough to poll:
+    // Postgres returns the count and no rows.
+    const queueCount = async (status: string) => {
+      const { count, error } = await supabase
+        .from("call_queue")
+        .select("id", { count: "exact", head: true })
+        .eq("status", status);
+      if (error) throw new Error(error.message);
+      return count ?? 0;
+    };
+    const [queued, dialing, runningBatches] = await Promise.all([
+      queueCount("queued"),
+      queueCount("dialing"),
+      supabase
+        .from("call_batches")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "running")
+        .then(({ count }) => count ?? 0),
+    ]);
+
     return NextResponse.json(
-      { ...summariseCalls(rows, startOfToday), since: DASHBOARD_SINCE || null },
+      {
+        ...summariseCalls(rows, startOfToday),
+        queued_calls: queued,
+        dialing_calls: dialing,
+        running_batches: runningBatches,
+        since: DASHBOARD_SINCE || null,
+      },
       { headers: { "cache-control": "no-store" } },
     );
   } catch (e) {

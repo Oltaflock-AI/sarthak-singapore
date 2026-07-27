@@ -747,7 +747,7 @@ export default function DialerPage() {
                 )}
               </div>
             ) : numbers.length === 0 && !numErr ? (
-              <div style={{ fontSize: 14, color: "var(--muted)", marginTop: 4 }}>Loading…</div>
+              <div className="skeleton" style={{ height: 18, width: 190, marginTop: 6 }} />
             ) : (
               <input
                 placeholder="Paste agent_phone_number_id"

@@ -1,6 +1,34 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
+
+// Poll on an interval AND the moment the tab comes back to the foreground, so a
+// dashboard left open on a second monitor / background tab never shows numbers
+// from ten minutes ago when you look at it again. Also refires when the network
+// comes back, since every fetch during an outage silently kept the old data.
+export function useAutoRefresh(fn: () => void | Promise<void>, everyMs: number) {
+  const saved = useRef(fn);
+  useEffect(() => { saved.current = fn; });
+
+  useEffect(() => {
+    let stopped = false;
+    const run = () => { if (!stopped) void saved.current(); };
+    const onWake = () => { if (document.visibilityState === "visible") run(); };
+
+    run();
+    const id = setInterval(run, everyMs);
+    document.addEventListener("visibilitychange", onWake);
+    window.addEventListener("focus", onWake);
+    window.addEventListener("online", onWake);
+    return () => {
+      stopped = true;
+      clearInterval(id);
+      document.removeEventListener("visibilitychange", onWake);
+      window.removeEventListener("focus", onWake);
+      window.removeEventListener("online", onWake);
+    };
+  }, [everyMs]);
+}
 
 // All reads go through gated server routes (/api/calls), which use the service
 // key behind the password proxy. The client no longer talks to Supabase with
@@ -42,11 +70,7 @@ export function useLiveData() {
     setLoading(false);
   };
 
-  useEffect(() => {
-    refetch();
-    const id = setInterval(refetch, 10000);
-    return () => clearInterval(id);
-  }, []);
+  useAutoRefresh(refetch, 10000);
 
   return { calls, loading, lastSync, refetch };
 }

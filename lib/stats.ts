@@ -16,8 +16,10 @@ export interface CallStats {
   answer_rate: number | null;
   reached_leads: number;
   avg_talk_seconds: number | null;
+  total_talk_seconds: number;
   today_calls: number;
   today_answered: number;
+  today_talk_seconds: number;
 }
 
 // Answered = the call connected and produced a conversation. ElevenLabs reports
@@ -37,6 +39,7 @@ export function summariseCalls(rows: CallStatRow[], startOfToday: Date): CallSta
   let todayTotal = 0;
   let todayAnswered = 0;
   let talkSecs = 0;
+  let todayTalkSecs = 0;
   const reached = new Set<string>();
 
   for (const r of rows) {
@@ -44,9 +47,10 @@ export function summariseCalls(rows: CallStatRow[], startOfToday: Date): CallSta
     const today = new Date(r.created_at) >= startOfToday;
     if (today) todayTotal++;
     if (answeredCall) {
+      const secs = r.duration_seconds ?? 0;
       answered++;
-      talkSecs += r.duration_seconds ?? 0;
-      if (today) todayAnswered++;
+      talkSecs += secs;
+      if (today) { todayAnswered++; todayTalkSecs += secs; }
       if (r.lead_phone) reached.add(phoneKey(r.lead_phone));
     }
   }
@@ -59,7 +63,9 @@ export function summariseCalls(rows: CallStatRow[], startOfToday: Date): CallSta
     answer_rate: total > 0 ? answered / total : null,
     reached_leads: reached.size,
     avg_talk_seconds: answered > 0 ? Math.round(talkSecs / answered) : null,
+    total_talk_seconds: talkSecs,
     today_calls: todayTotal,
     today_answered: todayAnswered,
+    today_talk_seconds: todayTalkSecs,
   };
 }

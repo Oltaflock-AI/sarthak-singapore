@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { useParams } from "next/navigation";
-import { fetchCall, CallRow } from "@/lib/data";
+import { fetchCall, useAutoRefresh, CallRow } from "@/lib/data";
 import { ScoreBadge } from "@/components/ScoreBadge";
 import { fmtDuration, timeAgo } from "@/lib/format";
 
@@ -279,16 +279,11 @@ export default function CallDetailPage() {
   const [copied, setCopied] = useState(false);
   const [transcriptOpen, setTranscriptOpen] = useState(false);
 
-  useEffect(() => {
-    const fetchOne = async () => {
-      const data = await fetchCall(String(params.id));
-      setCall(data);
-      setLoading(false);
-    };
-    fetchOne();
-    const id = setInterval(fetchOne, 10000);
-    return () => clearInterval(id);
-  }, [params.id]);
+  useAutoRefresh(async () => {
+    const data = await fetchCall(String(params.id));
+    setCall(data);
+    setLoading(false);
+  }, 10000);
 
   const analysis = (call?.analysis ?? {}) as AnalysisBlob;
   // Prefer a stored recording URL; otherwise stream ElevenLabs audio on demand

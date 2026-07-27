@@ -3,7 +3,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
 import Script from "next/script";
 import Link from "next/link";
-import { useLiveData, isMissedCall } from "@/lib/data";
+import { useLiveData, useAutoRefresh, isMissedCall } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { KpiCard } from "@/components/KpiCard";
 
@@ -52,8 +52,13 @@ type CallStats = {
   answer_rate: number | null;
   reached_leads: number;
   avg_talk_seconds: number | null;
+  total_talk_seconds: number;
   today_calls: number;
   today_answered: number;
+  today_talk_seconds: number;
+  queued_calls: number;
+  dialing_calls: number;
+  running_batches: number;
 };
 
 // 1_234_567 → "1.23M", 148_200 → "148k". Keeps the KPI on one line.
@@ -61,6 +66,14 @@ function compact(n: number): string {
   if (n >= 1_000_000) return `${(n / 1_000_000).toFixed(n >= 10_000_000 ? 0 : 2)}M`;
   if (n >= 10_000) return `${Math.round(n / 1000)}k`;
   return n.toLocaleString("en-IN");
+}
+
+// 95 → "1m 35s", 3_720 → "1h 2m". Talk time reads better than raw seconds.
+function duration(secs: number): string {
+  if (secs < 60) return `${Math.round(secs)}s`;
+  const m = Math.floor(secs / 60);
+  if (m < 60) return `${m}m ${Math.round(secs % 60)}s`;
+  return `${Math.floor(m / 60)}h ${m % 60}m`;
 }
 
 // Module-scope cache so leaving and returning to /overview doesn't flash empty
@@ -74,6 +87,8 @@ let cachedStats: CallStats | null = null;
 const ICONS = {
   leads: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="7" r="3" /><path d="M3.5 17a6.5 6.5 0 0 1 13 0" /></svg>,
   visits: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><rect x="3" y="4.5" width="14" height="13" rx="1.6" /><path d="M3 8.5h14M7 3v3M13 3v3" /></svg>,
+  talk: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M16.5 9.5a6.5 6.5 0 0 1-9.2 5.9L3.5 16.5l1.1-3.8A6.5 6.5 0 1 1 16.5 9.5Z" /></svg>,
+  queue: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4 6h12M4 10h12M4 14h7" /></svg>,
   pickup: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><path d="M4.2 4h3l1.2 3-1.6 1.2a9 9 0 0 0 4 4L12 10.6l3 1.2v3a1.2 1.2 0 0 1-1.3 1.2A11.5 11.5 0 0 1 3 5.3 1.2 1.2 0 0 1 4.2 4Z" /></svg>,
   credits: <svg className="kpi-icon" viewBox="0 0 20 20" fill="none" stroke="currentColor" strokeWidth="1.7" strokeLinecap="round" strokeLinejoin="round"><circle cx="10" cy="10" r="6.8" /><path d="M7.8 7h4.4M7.8 9.6h4.4M11 7c0 1.7-1.4 2.6-3.2 2.6L12 14" /></svg>,
 };
@@ -85,41 +100,54 @@ export default function Overview() {
   const [visits, setVisits] = useState<Visit[]>(() => cachedVisits);
   const [credits, setCredits] = useState<CreditUsage | null>(() => cachedCredits);
   const [stats, setStats] = useState<CallStats | null>(() => cachedStats);
+  // Tracks the first completed leads/visits fetch, so an genuinely empty
+  // pipeline renders "0" instead of shimmering forever.
+  const [leadsLoaded, setLeadsLoaded] = useState(() => cachedLeads.length > 0);
+  const [statsError, setStatsError] = useState<string | null>(null);
+  const [creditsError, setCreditsError] = useState<string | null>(null);
   const chartRefs = useRef<{ source: unknown; status: unknown }>({ source: null, status: null });
 
-  useEffect(() => {
-    const fetchAll = async () => {
-      try {
-        const [l, v, s] = await Promise.all([
-          fetch("/api/leads", { cache: "no-store" }).then((r) => r.json()),
-          fetch("/api/site-visits", { cache: "no-store" }).then((r) => r.json()),
-          fetch("/api/stats/calls", { cache: "no-store" }).then((r) => r.json()).catch(() => null),
-        ]);
-        if (Array.isArray(l)) { cachedLeads = l; setLeads(l); }
-        if (Array.isArray(v)) { cachedVisits = v; setVisits(v); }
-        if (s && typeof s.total_calls === "number") { cachedStats = s; setStats(s); }
-      } catch (err) {
-        console.error("[overview] fetch failed", err);
-      }
-    };
-    fetchAll();
-    const id = setInterval(fetchAll, 8000);
-    return () => clearInterval(id);
-  }, []);
+  useAutoRefresh(async () => {
+    const [l, v] = await Promise.all([
+      fetch("/api/leads", { cache: "no-store" }).then((r) => r.json()).catch(() => null),
+      fetch("/api/site-visits", { cache: "no-store" }).then((r) => r.json()).catch(() => null),
+    ]);
+    if (Array.isArray(l)) { cachedLeads = l; setLeads(l); setLeadsLoaded(true); }
+    if (Array.isArray(v)) { cachedVisits = v; setVisits(v); }
+  }, 8000);
+
+  // Call stats walk the whole `calls` table, so they get their own slower tick.
+  // They only move when a call ends, and useAutoRefresh still refires the moment
+  // the tab is focused — so the numbers are current whenever anyone is looking.
+  useAutoRefresh(async () => {
+    const s = await fetch("/api/stats/calls", { cache: "no-store" })
+      .then((r) => r.json())
+      .catch(() => null);
+    if (s && typeof s.total_calls === "number") {
+      cachedStats = s;
+      setStats(s);
+      setStatsError(null);
+    } else {
+      // Keep the last good numbers on screen and name the failure, rather than
+      // blanking the card to a dash that looks like "zero".
+      setStatsError(s?.error ? String(s.error).slice(0, 80) : "call stats unavailable");
+    }
+  }, 15_000);
 
   // Credits come straight off ElevenLabs, so poll far slower than the Supabase
   // data — the balance only moves when a call ends, and their API is rate-limited.
-  useEffect(() => {
-    const fetchCredits = async () => {
-      const c = await fetch("/api/usage/credits", { cache: "no-store" })
-        .then((r) => r.json())
-        .catch(() => null);
-      if (c && typeof c.used === "number") { cachedCredits = c; setCredits(c); }
-    };
-    fetchCredits();
-    const id = setInterval(fetchCredits, 60_000);
-    return () => clearInterval(id);
-  }, []);
+  useAutoRefresh(async () => {
+    const c = await fetch("/api/usage/credits", { cache: "no-store" })
+      .then((r) => r.json())
+      .catch(() => null);
+    if (c && typeof c.used === "number") {
+      cachedCredits = c;
+      setCredits(c);
+      setCreditsError(null);
+    } else {
+      setCreditsError(c?.error ? String(c.error).slice(0, 80) : "ElevenLabs unreachable");
+    }
+  }, 60_000);
 
   const creditPct =
     credits?.used != null && credits.total ? credits.used / credits.total : null;
@@ -193,7 +221,7 @@ export default function Overview() {
 
     const sourceEntries = Array.from(metrics.sourceCount.entries()).sort((a, b) => b[1] - a[1]);
 
-    const sLabels = sourceEntries.length ? sourceEntries.map(([k, v]) => `${k} · ${v}`) : ["—"];
+    const sLabels = sourceEntries.length ? sourceEntries.map(([k, v]) => `${k} · ${v}`) : ["No leads yet"];
     const sValues = sourceEntries.length ? sourceEntries.map(([, v]) => v) : [1];
 
     // @ts-expect-error CDN
@@ -262,27 +290,67 @@ export default function Overview() {
 
       {/* Primary KPIs */}
       <div className="kpi-grid">
-        <KpiCard label="Total Leads" value={metrics.total} sub={`+${todayLeads} today · ${connectedCalls} voice calls`} icon={ICONS.leads} />
-        <KpiCard label="Site Visits Booked" value={metrics.booked + metrics.converted} sub={`${todayBookings.length} booked today`} icon={ICONS.visits} />
+        <KpiCard
+          label="Total Leads"
+          value={metrics.total.toLocaleString("en-IN")}
+          sub={`+${todayLeads} today · ${connectedCalls.toLocaleString("en-IN")} connected calls`}
+          icon={ICONS.leads}
+          loading={!leadsLoaded}
+        />
+        <KpiCard
+          label="Site Visits Booked"
+          value={metrics.booked + metrics.converted}
+          sub={`${todayBookings.length} booked today · ${upcomingVisits.length} upcoming`}
+          icon={ICONS.visits}
+          loading={!leadsLoaded}
+        />
         <KpiCard
           label="Answer Rate"
-          value={answerRate == null ? "—" : `${answerRate}%`}
+          value={answerRate == null ? "0%" : `${answerRate}%`}
           sub={
             stats
               ? `${stats.answered_calls.toLocaleString("en-IN")} picked up of ${stats.total_calls.toLocaleString("en-IN")} dialled · ${stats.today_answered}/${stats.today_calls} today`
-              : "loading…"
+              : ""
           }
           icon={ICONS.pickup}
+          loading={!stats}
+          error={stats ? null : statsError}
           progress={stats?.answer_rate ?? undefined}
           progressColor={
             answerRate == null ? undefined : answerRate >= 40 ? "#22c55e" : answerRate >= 20 ? "#f59e0b" : "#ef4444"
           }
         />
         <KpiCard
+          label="Talk Time"
+          value={stats ? duration(stats.total_talk_seconds) : "0s"}
+          sub={
+            stats
+              ? `${stats.avg_talk_seconds != null ? duration(stats.avg_talk_seconds) : "0s"} average · ${duration(stats.today_talk_seconds)} today`
+              : ""
+          }
+          icon={ICONS.talk}
+          loading={!stats}
+          error={stats ? null : statsError}
+        />
+        <KpiCard
+          label="Dial Queue"
+          value={stats ? (stats.queued_calls + stats.dialing_calls).toLocaleString("en-IN") : "0"}
+          sub={
+            stats
+              ? stats.queued_calls + stats.dialing_calls === 0
+                ? `Queue empty · ${stats.running_batches} running campaign${stats.running_batches === 1 ? "" : "s"}`
+                : `${stats.dialing_calls} dialling now · ${stats.queued_calls.toLocaleString("en-IN")} waiting · ${stats.running_batches} campaign${stats.running_batches === 1 ? "" : "s"}`
+              : ""
+          }
+          icon={ICONS.queue}
+          loading={!stats}
+          error={stats ? null : statsError}
+        />
+        <KpiCard
           label="ElevenLabs Credits"
           value={
             credits?.used == null
-              ? "—"
+              ? "0"
               : credits.total != null
                 ? `${compact(credits.used)} / ${compact(credits.total)}`
                 : compact(credits.used)
@@ -290,12 +358,14 @@ export default function Overview() {
           unit="credits"
           sub={
             credits?.used == null
-              ? "loading…"
+              ? ""
               : credits.remaining != null
                 ? `${compact(credits.remaining)} left${resetLabel ? ` · resets ${resetLabel}` : ""}`
-                : `used this cycle${credits.warning ? " · plan quota unknown" : ""}`
+                : `spent this cycle${credits.convai_used != null ? ` · ${compact(credits.convai_used)} on calls` : ""}`
           }
           icon={ICONS.credits}
+          loading={credits?.used == null && creditsError == null}
+          error={credits?.used == null ? creditsError : null}
           progress={creditPct ?? undefined}
           progressColor={
             creditPct == null
@@ -361,9 +431,9 @@ export default function Overview() {
           </div>
           <div className="panel-body">
             <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 12 }}>
-              <ScoreRow label="Hot" count={metrics.hot} total={metrics.total} variant="hot" hint="80+ · Warm-transfer to sales" />
-              <ScoreRow label="Warm" count={metrics.warm} total={metrics.total} variant="warm" hint="60–79 · Engaged" />
-              <ScoreRow label="Cold" count={metrics.cold} total={metrics.total} variant="cold" hint="<60 · 14-day nurture" />
+              <ScoreRow label="Hot" count={metrics.hot} total={metrics.total} variant="hot" hint="Score 80+" />
+              <ScoreRow label="Warm" count={metrics.warm} total={metrics.total} variant="warm" hint="Score 60–79" />
+              <ScoreRow label="Cold" count={metrics.cold} total={metrics.total} variant="cold" hint="Score under 60" />
             </div>
           </div>
         </div>
@@ -385,7 +455,7 @@ export default function Overview() {
                     <div style={{ minWidth: 0 }}>
                       <div style={{ fontWeight: 600, fontSize: 12.5, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>{v.lead_name ?? v.lead_phone}</div>
                       <div style={{ fontSize: 11, color: "var(--muted)", marginTop: 2 }}>
-                        {v.project ?? "—"} · {v.scheduled_for_text ?? "TBD"}
+                        {v.project ?? "Project not set"} · {v.scheduled_for_text ?? "Time not set"}
                       </div>
                     </div>
                     <span style={{ fontSize: 10, color: v.status === "confirmed" ? "var(--gold)" : "var(--warm)", border: `1px solid ${v.status === "confirmed" ? "var(--gold)" : "var(--warm)"}`, padding: "2px 7px", borderRadius: 10, textTransform: "uppercase", letterSpacing: 0.4, fontWeight: 600 }}>{v.status}</span>
@@ -436,7 +506,7 @@ function ScoreRow({ label, count, total, variant, hint }: { label: string; count
       <div style={{ height: 4, background: "var(--bg-2)", borderRadius: 2, overflow: "hidden", marginBottom: 8 }}>
         <div style={{ height: "100%", width: `${pct}%`, background: c.fg, transition: "width 400ms ease-out" }} />
       </div>
-      <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{hint}</div>
+      <div style={{ fontSize: 10.5, color: "var(--muted)" }}>{hint} · {pct}% of leads</div>
     </div>
   );
 }
