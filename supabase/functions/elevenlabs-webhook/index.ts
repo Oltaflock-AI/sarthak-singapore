@@ -198,20 +198,32 @@ function formatWhenIST(iso: string | null): string {
   return `${days[d.getUTCDay()]}, ${d.getUTCDate()} ${months[d.getUTCMonth()]} ${d.getUTCFullYear()}, ${h}:${mm} ${ampm} IST`;
 }
 
+// Outcome of one Interakt send. Callers in the call-recording path ignore it —
+// a WhatsApp failure must never break recording — but returning it instead of
+// only logging makes a send verifiable without edge-function log access.
+interface SendResult {
+  ok: boolean;
+  to: string;
+  template: string;
+  status?: number;
+  detail?: string;
+}
+
 // Low-level Interakt (WhatsApp BSP) template send. Recipient is normalised to a
 // 10-digit +91 number. Non-fatal: a WhatsApp failure must never break call
-// recording, so this only logs on error. `tag` labels the log line.
+// recording, so this never throws — it logs and reports via SendResult.
+// `tag` labels the log line.
 async function sendInteraktMessage(
   to: string,
   templateName: string,
   bodyValues: string[],
   tag = "whatsapp",
-): Promise<void> {
+): Promise<SendResult> {
   const key = Deno.env.get("INTERAKT_API_KEY");
   const num = (to || "").replace(/\D/g, "").slice(-10);
   if (!key || num.length !== 10) {
     console.warn(`[${tag}] missing INTERAKT_API_KEY or valid recipient — skipping WhatsApp`);
-    return;
+    return { ok: false, to: num, template: templateName, detail: "missing key or invalid recipient" };
   }
   const payload = {
     countryCode: "+91",
@@ -228,11 +240,13 @@ async function sendInteraktMessage(
     const j = await res.json().catch(() => ({}));
     if (!res.ok || j?.result === false) {
       console.error(`[${tag}] Interakt send failed`, res.status, JSON.stringify(j).slice(0, 300));
-    } else {
-      console.log(`[${tag}] Interakt sent to`, num, JSON.stringify(j).slice(0, 200));
+      return { ok: false, to: num, template: templateName, status: res.status, detail: JSON.stringify(j).slice(0, 300) };
     }
+    console.log(`[${tag}] Interakt sent to`, num, JSON.stringify(j).slice(0, 200));
+    return { ok: true, to: num, template: templateName, status: res.status, detail: JSON.stringify(j).slice(0, 200) };
   } catch (e) {
     console.error(`[${tag}] Interakt error`, String(e));
+    return { ok: false, to: num, template: templateName, detail: String(e) };
   }
 }
 
@@ -312,11 +326,11 @@ function siteVisitOwner(project: string): { to: string; name: string; contact: s
 // serves every property. Non-fatal.
 async function sendSiteVisitWhatsApps(p: {
   name: string; phone: string; project: string; whenText: string;
-}): Promise<void> {
+}): Promise<{ sales: SendResult; client: SendResult }> {
   const owner = siteVisitOwner(p.project);
 
   // 1) Sales team notification.
-  await sendInteraktMessage(
+  const sales = await sendInteraktMessage(
     owner.to,
     Deno.env.get("WHATSAPP_SITEVISIT_SALES_TEMPLATE") ?? "ai_ssg_site_visit_booked",
     [dash(p.name), dispPhone(p.phone), dash(p.project), dash(p.whenText), "Confirmed"],
@@ -324,12 +338,14 @@ async function sendSiteVisitWhatsApps(p: {
   );
 
   // 2) Client confirmation (to the lead's own number).
-  await sendInteraktMessage(
+  const client = await sendInteraktMessage(
     p.phone,
     Deno.env.get("WHATSAPP_SITEVISIT_CLIENT_TEMPLATE") ?? "aiclient_ssg_sitevisit_booked",
     [dash(p.name), dash(p.project), dash(p.whenText), dash(owner.name), dispPhone(owner.contact)],
     "sitevisit-client",
   );
+
+  return { sales, client };
 }
 
 const corsHeaders = {
