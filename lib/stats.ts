@@ -34,6 +34,49 @@ function phoneKey(phone: string): string {
   return phone.replace(/[^\d]/g, "").slice(-10);
 }
 
+// ── Pickup rate ─────────────────────────────────────────────────────────────
+// It CANNOT come from the `calls` table. ElevenLabs stopped delivering
+// call_initiation_failure events on 2026-07-04 — the last zero-duration row in
+// `calls` is from that day — so every row since is an answered call and a
+// calls-derived rate reads 100%. The dialer knows better: `call_queue.attempts`
+// counts every dial it placed, and a row only reaches status 'completed' when
+// someone actually picked up. Everything else it retries with
+// last_error "no-answer — callback n/m".
+
+export interface DialRow {
+  status: string;
+  attempts: number | null;
+}
+
+export interface DialStats {
+  dial_attempts: number;
+  answered_dials: number;
+  answer_rate: number | null;
+  dials_today: number;
+  answered_today: number;
+}
+
+export function summariseDials(
+  rows: DialRow[],
+  dialsToday: number,
+  answeredToday: number,
+): DialStats {
+  let attempts = 0;
+  let answered = 0;
+  for (const r of rows) {
+    attempts += r.attempts ?? 0;
+    // One connect per row at most: the dialer stops retrying once it completes.
+    if (r.status === "completed") answered++;
+  }
+  return {
+    dial_attempts: attempts,
+    answered_dials: answered,
+    answer_rate: attempts > 0 ? answered / attempts : null,
+    dials_today: dialsToday,
+    answered_today: answeredToday,
+  };
+}
+
 export function summariseCalls(rows: CallStatRow[], startOfToday: Date): CallStats {
   let answered = 0;
   let todayTotal = 0;

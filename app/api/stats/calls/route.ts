@@ -1,7 +1,7 @@
 import { NextResponse } from "next/server";
 import { supabase } from "@/lib/supabase";
 import { DASHBOARD_SINCE } from "@/lib/config";
-import { summariseCalls, type CallStatRow } from "@/lib/stats";
+import { summariseCalls, summariseDials, type CallStatRow, type DialRow } from "@/lib/stats";
 
 export const runtime = "nodejs";
 export const dynamic = "force-dynamic";
@@ -34,8 +34,8 @@ export async function GET() {
       if (page.length < PAGE) break;
     }
 
-    // Dialer workload. Header-only counts, so this stays cheap enough to poll:
-    // Postgres returns the count and no rows.
+    // Dialer workload + pickup rate. Header-only counts where possible, so this
+    // stays cheap enough to poll: Postgres returns the count and no rows.
     const queueCount = async (status: string) => {
       const { count, error } = await supabase
         .from("call_queue")
@@ -44,7 +44,8 @@ export async function GET() {
       if (error) throw new Error(error.message);
       return count ?? 0;
     };
-    const [queued, dialing, runningBatches] = await Promise.all([
+    const todayIso = startOfToday.toISOString();
+    const [queued, dialing, runningBatches, dialsToday, answeredToday] = await Promise.all([
       queueCount("queued"),
       queueCount("dialing"),
       supabase
@@ -52,11 +53,47 @@ export async function GET() {
         .select("id", { count: "exact", head: true })
         .eq("status", "running")
         .then(({ count }) => count ?? 0),
+      // dialed_at holds the LATEST dial, so a lead re-dialled twice in one day
+      // counts once here — a slight undercount of today's attempts, never an
+      // overcount.
+      supabase
+        .from("call_queue")
+        .select("id", { count: "exact", head: true })
+        .gte("dialed_at", todayIso)
+        .then(({ count }) => count ?? 0),
+      supabase
+        .from("call_queue")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "completed")
+        .gte("completed_at", todayIso)
+        .then(({ count }) => count ?? 0),
     ]);
+
+    // Attempt totals need the rows: PostgREST aggregates are disabled on this
+    // project ("Use of aggregate functions is not allowed"), so page two columns.
+    const dialRows: DialRow[] = [];
+    for (let from = 0; ; from += PAGE) {
+      const { data, error } = await supabase
+        .from("call_queue")
+        .select("status,attempts")
+        .range(from, from + PAGE - 1);
+      if (error) throw new Error(error.message);
+      const page = (data ?? []) as DialRow[];
+      dialRows.push(...page);
+      if (page.length < PAGE) break;
+    }
+    const dials = summariseDials(dialRows, dialsToday, answeredToday);
+
+    const calls = summariseCalls(rows, startOfToday);
 
     return NextResponse.json(
       {
-        ...summariseCalls(rows, startOfToday),
+        // `calls`-derived answer_rate is deliberately dropped: it counts only
+        // conversations that reached the webhook, so it reads ~100% since
+        // 2026-07-04. `dials` supplies the honest rate, and spreading it last
+        // makes that explicit.
+        ...calls,
+        ...dials,
         queued_calls: queued,
         dialing_calls: dialing,
         running_batches: runningBatches,

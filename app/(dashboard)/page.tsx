@@ -59,6 +59,13 @@ type CallStats = {
   queued_calls: number;
   dialing_calls: number;
   running_batches: number;
+  // Pickup rate comes from the dialer's own attempt log, not the `calls` table
+  // — ElevenLabs stopped sending no-answer events on 2026-07-04, so `calls`
+  // holds answered conversations only and would show a 100% pickup rate.
+  dial_attempts: number;
+  answered_dials: number;
+  dials_today: number;
+  answered_today: number;
 };
 
 // 1_234_567 → "1.23M", 148_200 → "148k". Keeps the KPI on one line.
@@ -309,7 +316,7 @@ export default function Overview() {
           value={answerRate == null ? "0%" : `${answerRate}%`}
           sub={
             stats
-              ? `${stats.answered_calls.toLocaleString("en-IN")} picked up of ${stats.total_calls.toLocaleString("en-IN")} dialled · ${stats.today_answered}/${stats.today_calls} today`
+              ? `${stats.answered_dials.toLocaleString("en-IN")} picked up of ${stats.dial_attempts.toLocaleString("en-IN")} dials · ${stats.answered_today}/${stats.dials_today} today`
               : ""
           }
           icon={ICONS.pickup}
