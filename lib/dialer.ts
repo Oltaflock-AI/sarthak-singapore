@@ -14,7 +14,8 @@
 // even when nobody has the dashboard open.
 
 import { supabase } from "@/lib/supabase";
-import { placeOutboundCall, greetingFor } from "@/lib/elevenlabs";
+import { placeOutboundCall, greetingFor, isQuotaError } from "@/lib/elevenlabs";
+import { checkCredits, pauseAllCampaigns } from "@/lib/creditGuard";
 import { cleanLeadName } from "@/lib/leadImport";
 
 const STALE_MIN = 6;
@@ -222,6 +223,15 @@ async function dialNext(
 ): Promise<{ queue_id: string; conversation_id: string | null }[]> {
   if (!withinCallWindowIST()) return []; // no calls outside 10:00–20:00 IST
 
+  // No credits, no calls. Checked before anything is dialed so an empty balance
+  // costs nothing; see lib/creditGuard.ts for why this brake fails open and the
+  // quota-rejection brake below does not.
+  const credits = await checkCredits();
+  if (credits.blocked) {
+    await pauseAllCampaigns(credits.reason ?? "ElevenLabs credits exhausted");
+    return [];
+  }
+
   // Post-call cooldown: if any call ended very recently, hold off dialing so its
   // VoBiz channel has time to tear down (see POST_CALL_COOLDOWN_SECS). The webhook
   // writes a `calls` row when a call ends, so the newest row ≈ the last hangup.
@@ -326,7 +336,21 @@ async function dialNext(
         globalFree--;
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e);
-        // The call was never placed (EL/VoBiz rejected, network, out of credits).
+
+        // Out of credits is not a transient failure — ElevenLabs will reject
+        // every subsequent call too. Pause every campaign so the cron can't keep
+        // grinding through the queue, and put this lead back as due now: it was
+        // never actually dialed, and nothing else is competing for the slot.
+        if (isQuotaError(msg)) {
+          await supabase
+            .from("call_queue")
+            .update({ status: "queued", next_attempt_at: null, last_error: `paused — ${msg}` })
+            .eq("id", next.id);
+          await pauseAllCampaigns(`ElevenLabs rejected a call: ${msg}`);
+          return dialed;
+        }
+
+        // The call was never placed (EL/VoBiz rejected, network).
         // Deliberately do NOT touch `attempts` — that counter drives the multi-day
         // retry cadence, and a placement failure isn't a real dial; burning it
         // would let a transient outage march a lead through 1→3→5→7→15→30 and give

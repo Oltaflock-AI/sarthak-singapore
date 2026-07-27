@@ -51,16 +51,21 @@ async function enqueueCampaign(
 ): Promise<string | null> {
   if (!leads.length) return null;
 
-  const { data: running } = await supabase
+  // Prefer the running batch. If the campaign is PAUSED — someone stopped
+  // calling, e.g. the credit guard — append to that paused batch instead of
+  // spinning up a fresh running one, which would silently restart dialing.
+  const { data: existingBatch } = await supabase
     .from("call_batches")
-    .select("id")
+    .select("id,status")
     .eq("label", campaign.label)
-    .eq("status", "running")
+    .in("status", ["running", "paused"])
+    .order("status", { ascending: true }) // 'paused' < 'running'; re-sorted below
     .order("created_at", { ascending: false })
-    .limit(1)
-    .maybeSingle();
+    .limit(10);
 
-  let batchId = running?.id;
+  const batches = existingBatch ?? [];
+  let batchId =
+    batches.find((b) => b.status === "running")?.id ?? batches.find((b) => b.status === "paused")?.id;
   if (!batchId) {
     const { data: batch, error: bErr } = await supabase
       .from("call_batches")

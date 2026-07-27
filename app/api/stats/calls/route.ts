@@ -45,13 +45,18 @@ export async function GET() {
       return count ?? 0;
     };
     const todayIso = startOfToday.toISOString();
-    const [queued, dialing, runningBatches, dialsToday, answeredToday] = await Promise.all([
+    const [queued, dialing, runningBatches, pausedBatches, dialsToday, answeredToday] = await Promise.all([
       queueCount("queued"),
       queueCount("dialing"),
       supabase
         .from("call_batches")
         .select("id", { count: "exact", head: true })
         .eq("status", "running")
+        .then(({ count }) => count ?? 0),
+      supabase
+        .from("call_batches")
+        .select("id", { count: "exact", head: true })
+        .eq("status", "paused")
         .then(({ count }) => count ?? 0),
       // dialed_at holds the LATEST dial, so a lead re-dialled twice in one day
       // counts once here — a slight undercount of today's attempts, never an
@@ -97,6 +102,7 @@ export async function GET() {
         queued_calls: queued,
         dialing_calls: dialing,
         running_batches: runningBatches,
+        paused_batches: pausedBatches,
         since: DASHBOARD_SINCE || null,
       },
       { headers: { "cache-control": "no-store" } },

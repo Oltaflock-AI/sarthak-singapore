@@ -120,6 +120,21 @@ export interface CreditUsage {
 // Plan quota fallback for keys that can't read /v1/user/subscription.
 const PLAN_CREDITS = Number(process.env.ELEVENLABS_PLAN_CREDITS) || 0;
 
+// Does this failure mean "you are out of credits" rather than "try again"?
+// ElevenLabs words it several ways depending on the endpoint, so match broadly.
+export function isQuotaError(message: string): boolean {
+  const m = message.toLowerCase();
+  return (
+    m.includes("quota") ||
+    m.includes("out of credits") ||
+    m.includes("insufficient credit") ||
+    m.includes("credit limit") ||
+    m.includes("exceeded your current") ||
+    m.includes("payment required") ||
+    m.includes("402")
+  );
+}
+
 // One credits reading for the dashboard. Never throws unless BOTH endpoints
 // fail — a partial answer still beats an empty KPI.
 export async function getCreditUsage(): Promise<CreditUsage> {

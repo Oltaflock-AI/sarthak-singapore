@@ -59,6 +59,7 @@ type CallStats = {
   queued_calls: number;
   dialing_calls: number;
   running_batches: number;
+  paused_batches: number;
   // Pickup rate comes from the dialer's own attempt log, not the `calls` table
   // — ElevenLabs stopped sending no-answer events on 2026-07-04, so `calls`
   // holds answered conversations only and would show a 100% pickup rate.
@@ -195,6 +196,7 @@ export default function Overview() {
     visits.filter((v) => v.status === "pending" || v.status === "confirmed").slice(0, 6),
   [visits]);
 
+  // Open leads worth a human follow-up, hottest first.
   const priorityLeads = useMemo(() => {
     const terminal = new Set(["booked", "converted", "lost"]);
     return [...leads]
@@ -334,7 +336,7 @@ export default function Overview() {
         />
         <KpiCard
           label="Talk Time"
-          value={stats ? duration(stats.total_talk_seconds) : "0s"}
+          value={stats ? `${Math.round(stats.total_talk_seconds / 60).toLocaleString("en-IN")} min` : "0 min"}
           sub={
             stats
               ? `${stats.avg_talk_seconds != null ? duration(stats.avg_talk_seconds) : "0s"} average · ${duration(stats.today_talk_seconds)} today`
@@ -349,12 +351,16 @@ export default function Overview() {
           // Distinct leads still to call — NOT queue rows, which duplicate.
           value={stats ? stats.waiting_leads.toLocaleString("en-IN") : "0"}
           sub={
-            stats
-              ? stats.waiting_leads === 0
+            !stats
+              ? ""
+              : stats.waiting_leads === 0
                 ? `Everyone called · ${stats.running_batches} running campaign${stats.running_batches === 1 ? "" : "s"}`
-                : `${stats.dialing_calls} dialling now · ${stats.running_batches} campaign${stats.running_batches === 1 ? "" : "s"} running`
-              : ""
+                : stats.running_batches === 0
+                  // Never let a stopped dialer look like a working one.
+                  ? `PAUSED · ${stats.paused_batches} campaign${stats.paused_batches === 1 ? "" : "s"} on hold · no calls going out`
+                  : `${stats.dialing_calls} dialling now · ${stats.running_batches} campaign${stats.running_batches === 1 ? "" : "s"} running`
           }
+          progressColor={stats && stats.running_batches === 0 && stats.waiting_leads > 0 ? "#f59e0b" : undefined}
           icon={ICONS.queue}
           loading={!stats}
           error={stats ? null : statsError}
@@ -436,6 +442,7 @@ export default function Overview() {
       </div>
 
       {/* Campaign progress — the Zoho "Not Answer" population, per property */}
+
       <div className="panel" style={{ marginBottom: 22 }}>
         <div className="panel-head">
           <div className="panel-title">Campaigns · Zoho &ldquo;Not Answer&rdquo; leads</div>
