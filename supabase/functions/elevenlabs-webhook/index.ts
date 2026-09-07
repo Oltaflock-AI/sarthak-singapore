@@ -565,9 +565,12 @@ Deno.serve(async (req) => {
   );
   // Idempotency: a webhook retry must not re-send WhatsApp. We flag both the
   // transfer handoff and the site-visit notify on the calls row's analysis.
-  const { data: priorCall } = (transferred || siteVisit)
-    ? await supabase.from("calls").select("analysis").eq("call_id", call_id).maybeSingle()
-    : { data: null };
+  // Always read the existing row: besides the idempotency flags, it may hold the
+  // deep AI enrichment (sentiment / motivation / coaching). A webhook redelivery
+  // replaces the whole analysis column, so that work has to be carried forward
+  // or a retry silently wipes it.
+  const { data: priorCall } = await supabase
+    .from("calls").select("analysis").eq("call_id", call_id).maybeSingle();
   const priorAnalysis = (priorCall?.analysis as Record<string, unknown> | undefined) ?? {};
   const alreadyHandedOff = Boolean(priorAnalysis.handoff_sent);
   const alreadySiteVisitNotified = Boolean(priorAnalysis.sitevisit_whatsapp_sent);
@@ -579,6 +582,25 @@ Deno.serve(async (req) => {
     direction,
     agent_id: pick(data, ["agent_id"]),
     termination_reason: pick(metadata, ["termination_reason"]) || undefined,
+    // Booking facts belong on the call row too — the dashboard's "Site visits
+    // booked" view reads analysis.site_visit_booked, and without this it stayed
+    // empty even when site_visits had the row.
+    site_visit_booked: siteVisit || priorAnalysis.site_visit_booked === true,
+    site_visit_datetime: visitWhenIso ?? priorAnalysis.site_visit_datetime ?? null,
+    // Deep enrichment written by /api/calls/enrich — preserved across retries.
+    sentiment: priorAnalysis.sentiment ?? undefined,
+    motivation: priorAnalysis.motivation ?? undefined,
+    coaching: priorAnalysis.coaching ?? undefined,
+    key_points: priorAnalysis.key_points ?? undefined,
+    action_items: priorAnalysis.action_items ?? undefined,
+    next_action: priorAnalysis.next_action ?? undefined,
+    nri_status: priorAnalysis.nri_status ?? undefined,
+    recording_url: priorAnalysis.recording_url ?? undefined,
+    // Qualification the agent collected, in the same shape the deep enrichment
+    // writes, so cards show real values before enrichment lands.
+    intent: intentRaw ?? priorAnalysis.intent ?? undefined,
+    budget_range: budget ?? priorAnalysis.budget_range ?? undefined,
+    timeline: timeline ?? priorAnalysis.timeline ?? undefined,
     // Sent-flags are stamped AFTER a send actually succeeds (see below) — the
     // old stamp-on-upsert made a wallet-dead failure look sent and unretryable.
     // Carry forward what a prior delivery already accomplished.

@@ -1,0 +1,306 @@
+import { supabase } from "@/lib/supabase";
+import { completeJson } from "@/lib/llm";
+import { getCalBookingOutcome } from "@/lib/elevenlabs";
+
+// Deep post-call analysis: score, sentiment, motivation, coaching. Lives here
+// (not in the route) so both the on-demand route and the backfill pass run the
+// exact same logic.
+
+const ENRICH_PROMPT = `You are a senior real-estate sales analyst. Read this Sarthak Singapore voice-call transcript between an AI sales agent and a prospective buyer and produce a DEEP, evidence-based analysis. Quote or paraphrase actual transcript moments as evidence — never invent.
+
+Return ONLY this JSON object:
+
+{
+  "lead_name": string | null,
+  "project": "Singapore Miracle",   // the only project Sarthak Singapore is calling about — always this value
+  "buyer_type": "end_use" | "investment" | null,
+  "residency": "local" | "nri" | null,
+  "timeline": string | null,
+  "budget": string | null,
+  "lead_score": number,        // 0-100 overall lead quality
+  "score_label": "HOT" | "WARM" | "COLD",
+  "summary": string,           // 2-3 sentence English summary of the whole call
+  "outcome": string,           // e.g., "Site visit booked · Saturday 11am", "Qualified · awaiting brochure", "Not interested"
+  "language": string | null,   // "hi", "en", "hi-en", etc.
+  "site_visit_booked": boolean,
+  "site_visit_datetime": string | null,   // ISO 8601 (Asia/Kolkata) of the agreed visit slot if a specific day/time was set, else null
+  "next_action": string | null,
+
+  "sentiment": {
+    "overall": "positive" | "neutral" | "negative" | "mixed",
+    "score": number,                 // 0-100, 100 = extremely positive/enthusiastic, 50 = neutral, 0 = hostile
+    "trajectory": "improving" | "declining" | "steady" | "volatile",  // how mood moved across the call
+    "emotions": string[],            // 2-5 specific emotions observed, e.g. ["curious","price-anxious","reassured"]
+    "rationale": string,             // 2-3 sentences explaining the read, citing what the buyer said
+    "moments": [                     // 2-4 pivotal emotional moments
+      { "quote": string, "read": string }   // quote = paraphrased buyer line, read = what it signals
+    ]
+  },
+
+  "motivation": {
+    "score": number,                 // 0-100 — how strongly motivated to actually buy soon
+    "level": "very_high" | "high" | "moderate" | "low" | "unclear",
+    "urgency": "immediate" | "weeks" | "months" | "exploratory" | "unclear",
+    "buying_stage": "unaware" | "researching" | "comparing" | "ready_to_visit" | "ready_to_buy",
+    "signals": [                     // 3-6 concrete motivation signals, each with evidence + weight
+      { "signal": string, "evidence": string, "weight": "strong" | "medium" | "weak" }
+    ],
+    "objections": [                  // buyer concerns/blockers; [] if none
+      { "objection": string, "severity": "high" | "medium" | "low", "handled": boolean }
+    ],
+    "drivers": string[]              // 2-4 core reasons this person would buy (e.g. "school proximity for kids")
+  },
+
+  "coaching": {
+    "what_went_well": string[],      // 1-3 things the agent did well
+    "what_to_improve": string[],     // 1-3 misses or follow-up gaps
+    "recommended_next_step": string  // single sharpest next action for the human sales team
+  },
+
+  "key_points": string[],            // 3-6 factual bullets a salesperson must know before follow-up
+  "action_items": string[]           // 2-5 concrete to-dos
+}
+
+Rules:
+- Use null / [] for genuinely unknown fields. Do NOT invent facts.
+- lead_score 80+ = HOT (clear intent + budget + timeline), 60-79 = WARM (engaged, vague on one dimension), <60 = COLD.
+- sentiment.score and motivation.score are independent of lead_score — a buyer can be warm but anxious, or cold but polite.
+- Be specific and quote real moments in evidence/rationale/moments.
+- Reply ONLY with the JSON object, no prose around it.`;
+
+type Turn = { speaker?: string; text?: string };
+
+// What the model is asked to return (see ENRICH_PROMPT). Everything is optional:
+// a model can omit or null any field, and the merge below handles that.
+interface ParsedEnrichment {
+  lead_name?: string | null;
+  buyer_type?: string | null;
+  residency?: string | null;
+  timeline?: string | null;
+  budget?: string | null;
+  lead_score?: number | null;
+  score_label?: string | null;
+  summary?: string | null;
+  outcome?: string | null;
+  language?: string | null;
+  site_visit_datetime?: string | null;
+  next_action?: string | null;
+  sentiment?: unknown;
+  motivation?: unknown;
+  coaching?: unknown;
+  key_points?: unknown;
+  action_items?: unknown;
+}
+
+export interface EnrichResult {
+  ok: boolean;
+  status: number;
+  error?: string;
+  call?: Record<string, unknown>;
+}
+
+// Enrich one call, keyed by dashboard `id` (uuid) or provider `call_id`.
+export async function enrichCall(key: { id?: string; call_id?: string }): Promise<EnrichResult> {
+  const { id, call_id } = key;
+  if (!id && !call_id) return { ok: false, status: 400, error: "call_id or id required" };
+
+  const { data: call, error } = await supabase
+    .from("calls")
+    .select("*")
+    .eq(id ? "id" : "call_id", id ?? call_id)
+    .maybeSingle();
+  if (error || !call) {
+    return { ok: false, status: 404, error: error?.message ?? "call not found" };
+  }
+
+  const turns = (call.transcript ?? []) as Turn[];
+  if (!turns.length) return { ok: false, status: 400, error: "no transcript to analyse" };
+
+  const transcriptText = turns
+    .map((t) => `${(t.speaker ?? "speaker").toUpperCase()}: ${t.text ?? ""}`)
+    .join("\n");
+
+  // Anchor relative dates ("tomorrow 2pm") to the call's real IST timestamp so the
+  // model resolves site_visit_datetime to an actual calendar date, not a guess.
+  const callIst = new Date(call.created_at as string).toLocaleString("en-IN", {
+    timeZone: "Asia/Kolkata",
+    weekday: "long", year: "numeric", month: "long", day: "numeric",
+    hour: "2-digit", minute: "2-digit",
+  });
+  const dateContext = `This call took place on ${callIst} IST. Resolve any relative dates the caller mentions (e.g. "tomorrow", "Saturday", "agle hafte") against THIS date when filling site_visit_datetime — output a full absolute ISO 8601 timestamp with the correct year. Never guess the year.\n\nTranscript:\n`;
+
+  try {
+    const completion = await completeJson({
+      system: ENRICH_PROMPT,
+      user: dateContext + transcriptText,
+      maxTokens: 2500,
+      temperature: 0.2,
+    });
+    const parsed = completion.json as ParsedEnrichment;
+
+    const prevAnalysis = (call.analysis ?? {}) as Record<string, unknown>;
+
+    // Authoritative booking truth comes ONLY from the actual cal.com tool result
+    // (calcom_create_booking) — never GPT's transcript reading, which marks
+    // failed attempts and even no-booking conversations as "booked". When we
+    // can't reach ElevenLabs to verify (null), we keep whatever the webhook
+    // already established instead of asserting "not booked".
+    const calBooking = call.call_id
+      ? await getCalBookingOutcome(String(call.call_id))
+      : null;
+    const verified = calBooking != null;
+    // The webhook proves a booking by writing a site_visits row (it only does so
+    // when the cal.com tool returned a real uid) — it does NOT stamp
+    // analysis.site_visit_booked. So when we can't reach ElevenLabs to verify,
+    // that table is the fallback truth; reading only the analysis flag used to
+    // resolve to false and rewrite 15 genuine bookings as "no site visit booked".
+    let prevBooked = prevAnalysis.site_visit_booked === true;
+    if (!verified && !prevBooked && call.call_id) {
+      const { data: visit } = await supabase
+        .from("site_visits")
+        .select("call_id")
+        .eq("call_id", String(call.call_id))
+        .maybeSingle();
+      prevBooked = visit != null;
+    }
+    const isBooked = verified ? calBooking!.booked === true : prevBooked;
+    const bookedDatetime = isBooked
+      ? (calBooking?.startUtc ?? (prevAnalysis.site_visit_datetime as string | null) ?? parsed.site_visit_datetime ?? null)
+      : null;
+
+    const update: Record<string, unknown> = {};
+    if (parsed.lead_name) update.lead_name = parsed.lead_name;
+    // Project is decided by which agent placed the call (webhook sets it) —
+    // never let the model pick or invent one. Only fill it when it's missing.
+    if (!call.project) update.project = "Singapore Miracle";
+    if (typeof parsed.lead_score === "number") update.lead_score = parsed.lead_score;
+    if (parsed.score_label) update.score_label = parsed.score_label;
+    if (parsed.summary) update.summary = parsed.summary;
+    if (parsed.outcome) {
+      // Don't let GPT's prose assert a booking the cal.com result didn't confirm.
+      const claimsBooking = /\bbook(ed|ing)?\b/i.test(String(parsed.outcome));
+      update.outcome = !isBooked && claimsBooking
+        ? "Spoke with lead · no site visit booked"
+        : parsed.outcome;
+    }
+    if (parsed.language) update.language = parsed.language;
+
+    // Merge onto the existing webhook analysis so recording_url, evaluation
+    // criteria, WhatsApp sent-flags etc. survive re-enrichment.
+    update.analysis = {
+      ...prevAnalysis,
+      intent: parsed.buyer_type ?? prevAnalysis.intent ?? null,
+      budget_range: parsed.budget ?? prevAnalysis.budget_range ?? null,
+      timeline: parsed.timeline ?? prevAnalysis.timeline ?? null,
+      nri_status: parsed.residency ?? prevAnalysis.nri_status ?? null,
+      site_visit_booked: isBooked,
+      site_visit_datetime: bookedDatetime,
+      next_action: parsed.next_action ?? prevAnalysis.next_action ?? null,
+      sentiment: parsed.sentiment ?? prevAnalysis.sentiment ?? null,
+      motivation: parsed.motivation ?? prevAnalysis.motivation ?? null,
+      coaching: parsed.coaching ?? prevAnalysis.coaching ?? null,
+      key_points: Array.isArray(parsed.key_points) && parsed.key_points.length
+        ? parsed.key_points
+        : (prevAnalysis.key_points ?? []),
+      action_items: Array.isArray(parsed.action_items) && parsed.action_items.length
+        ? parsed.action_items
+        : (prevAnalysis.action_items ?? []),
+      enriched_at: new Date().toISOString(),
+      enriched_by: `${completion.provider}:${completion.model}`,
+    };
+
+    const { data: updated, error: upErr } = await supabase
+      .from("calls")
+      .update(update)
+      .eq("id", call.id)
+      .select()
+      .single();
+    if (upErr) return { ok: false, status: 500, error: upErr.message };
+
+    // Also upsert into leads CRM table so it shows up on /leads.
+    // Canonicalize to +E.164 so this matches the webhook's key and never forks
+    // into a second (unprefixed) lead row. Collapse any legacy unprefixed row.
+    if (call.lead_phone) {
+      const digits = String(call.lead_phone).replace(/[^\d]/g, "");
+      const phone = digits ? `+${digits}` : String(call.lead_phone);
+      const legacyPhone = phone.replace(/^\+/, "");
+
+      const { data: rows } = await supabase
+        .from("leads")
+        .select("*")
+        .in("phone", [phone, legacyPhone]);
+      const existingLead =
+        rows?.find((r) => r.phone === phone) ??
+        rows?.find((r) => r.phone === legacyPhone) ??
+        null;
+      // Drop the legacy unprefixed duplicate before writing the canonical row.
+      if (legacyPhone !== phone) {
+        await supabase.from("leads").delete().eq("phone", legacyPhone);
+      }
+
+      // Status is sticky upward (booked > qualified > new): a later non-booking
+      // call must never downgrade a lead that already booked a verified visit.
+      let status = existingLead?.status ?? "new";
+      if (isBooked) status = "booked";
+      else if (status !== "booked" && (parsed.buyer_type || parsed.timeline || parsed.budget)) status = "qualified";
+
+      await supabase.from("leads").upsert({
+        phone,
+        name: parsed.lead_name ?? existingLead?.name ?? null,
+        project: call.project ?? existingLead?.project ?? "Singapore Miracle",
+        buyer_type: parsed.buyer_type ?? existingLead?.buyer_type ?? null,
+        residency: parsed.residency ?? existingLead?.residency ?? null,
+        timeline: parsed.timeline ?? existingLead?.timeline ?? null,
+        budget: parsed.budget ?? existingLead?.budget ?? null,
+        lead_score: Math.max(parsed.lead_score ?? 50, existingLead?.lead_score ?? 0),
+        score_label: parsed.score_label ?? existingLead?.score_label ?? "WARM",
+        source: existingLead?.source ?? "voice_agent",
+        status,
+      }, { onConflict: "phone" });
+
+      // Mirror genuine bookings into site_visits (shown on /site-visits). Driven by
+      // the authoritative cal.com tool result when available — so failed attempts
+      // (e.g. slot unavailable) never create a row, and the time is cal.com's real
+      // booked start, not GPT's guess. Idempotent on call_id.
+      const callKey = String(call.call_id ?? call.id);
+      if (isBooked) {
+        const startSrc = calBooking?.startUtc ?? bookedDatetime ?? null;
+        const whenIso = startSrc && Number.isFinite(Date.parse(startSrc))
+          ? new Date(startSrc).toISOString()
+          : null;
+        const visitRow: Record<string, unknown> = {
+          call_id: callKey,
+          lead_phone: phone,
+          status: "pending",
+          notes: calBooking?.uid
+            ? `Booked via cal.com · ${calBooking.uid}`
+            : (parsed.outcome ?? "Booked via voice agent"),
+        };
+        if (parsed.lead_name ?? existingLead?.name) visitRow.lead_name = parsed.lead_name ?? existingLead?.name;
+        visitRow.project = call.project ?? "Singapore Miracle";
+        if (whenIso) visitRow.scheduled_for = whenIso;
+        // Human-readable IST for the dashboard (e.g. "Fri 5 Jun, 2:00 PM").
+        if (whenIso) {
+          visitRow.scheduled_for_text = new Date(whenIso).toLocaleString("en-IN", {
+            timeZone: "Asia/Kolkata", weekday: "short", day: "numeric",
+            month: "short", hour: "numeric", minute: "2-digit", hour12: true,
+          });
+        } else if (startSrc) {
+          visitRow.scheduled_for_text = startSrc;
+        }
+        const { error: visitErr } = await supabase
+          .from("site_visits")
+          .upsert(visitRow, { onConflict: "call_id" });
+        if (visitErr) console.error("[enrich] site_visits upsert error", visitErr, visitRow);
+      } else if (verified) {
+        // We inspected the conversation and found no real cal.com booking →
+        // remove any stale/false-positive row. (Unverified = leave untouched.)
+        await supabase.from("site_visits").delete().eq("call_id", callKey);
+      }
+    }
+
+    return { ok: true, status: 200, call: updated };
+  } catch (err) {
+    return { ok: false, status: 500, error: (err as Error).message };
+  }
+}

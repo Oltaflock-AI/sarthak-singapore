@@ -39,9 +39,14 @@ export async function proxy(req: NextRequest) {
     return NextResponse.next();
   }
 
-  // Scheduled jobs (dialer tick + Zoho lead sync) must stay reachable by the
+  // Scheduled jobs (dialer tick, Zoho lead sync, call enrichment) must stay
+  // reachable by the
   // cron with no cookie — it sends `Authorization: Bearer ${CRON_SECRET}`.
-  if (pathname === "/api/voice/process" || pathname === "/api/zoho/sync") {
+  if (
+    pathname === "/api/voice/process" ||
+    pathname === "/api/zoho/sync" ||
+    pathname === "/api/calls/enrich/backfill"
+  ) {
     const cronSecret = process.env.CRON_SECRET ?? "";
     const auth = req.headers.get("authorization") ?? "";
     if (cronSecret && timingSafeEqual(auth, `Bearer ${cronSecret}`)) {

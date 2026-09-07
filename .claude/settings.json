@@ -1,0 +1,13 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(printenv)",
+      "Bash(sed -n '160,300p' lib/dialer.ts)",
+      "Bash(sed -n '180,230p' lib/elevenlabs.ts)",
+      "Bash(sed -n '320,380p' \"app/\\(dashboard\\)/dialer/page.tsx\")",
+      "Bash(sed -n '460,580p' \"app/\\(dashboard\\)/dialer/page.tsx\")",
+      "Bash(GIT_EDITOR=true git rebase --continue)",
+      "Bash(echo \"BUILD_EXIT=$?\")"
+    ]
+  }
+}

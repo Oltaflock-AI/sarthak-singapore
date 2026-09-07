@@ -325,6 +325,11 @@ export default function CallDetailPage() {
   }, [ai, regexSentiment]);
 
   const motivation = analysis.motivation ?? null;
+  // Did the human side actually say anything? Enrichment is skipped on calls
+  // where the agent talked into silence (busy line, instant hangup).
+  const spokeToLead = (call?.transcript ?? []).some(
+    (t) => t.side === "user" || t.speaker === "user",
+  );
   const coaching = analysis.coaching ?? null;
 
   if (loading) {
@@ -472,7 +477,12 @@ export default function CallDetailPage() {
           sub={
             motivation
               ? `${motivation.level ? humanize(motivation.level) : "—"}${motivation.urgency ? ` · ${humanize(motivation.urgency)}` : ""}`
-              : "Awaiting analysis"
+              // A call the lead never spoke on has nothing to read — saying
+              // "awaiting analysis" implies work that is still coming, and it
+              // never is.
+              : spokeToLead
+              ? "Awaiting analysis"
+              : "Lead never spoke"
           }
           accent={
             motivation && typeof motivation.score === "number"
