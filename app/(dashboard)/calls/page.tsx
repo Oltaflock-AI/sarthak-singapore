@@ -55,9 +55,17 @@ export default function CallsPage() {
   const connected = useMemo(() => calls.filter((c) => !isMissedCall(c)), [calls]);
   const missed = useMemo(() => calls.filter((c) => isMissedCall(c)), [calls]);
 
-  // Conversations that ran past a minute — long enough to carry real signal.
+  // Conversations that ran past a minute AND actually completed — a call the
+  // platform tagged `failure` (quota exceeded, LLM timeout) can still burn 90
+  // seconds of dead air and carries no signal, so it's excluded.
   const insightful = useMemo(
-    () => connected.filter((c) => (c.duration_seconds ?? 0) > 60),
+    () =>
+      connected.filter((c) => {
+        if ((c.duration_seconds ?? 0) <= 60) return false;
+        const status = (c.analysis ?? {} as Record<string, unknown>).call_successful;
+        if (status === "failure") return false;
+        return String(c.outcome ?? "").toLowerCase() !== "failure";
+      }),
     [connected],
   );
   // Calls where the agent actually closed a site visit — a row in site_visits,
