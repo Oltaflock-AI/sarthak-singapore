@@ -114,7 +114,7 @@ export default function CallsPage() {
         title="Voice Calls"
         subtitle={
           view === "missed"
-            ? `${missed.length} ${missed.length === 1 ? "call" : "calls"} that didn't connect (busy, no answer, or rejected)`
+            ? `${missed.length} ${missed.length === 1 ? "call" : "calls"} that never became a conversation — voicemail, no answer, or a platform error`
             : view === "insightful"
             ? `${insightful.length} ${insightful.length === 1 ? "conversation" : "conversations"} that ran longer than a minute`
             : view === "booked"
@@ -208,7 +208,7 @@ export default function CallsPage() {
             filteredMissed.length === 0 ? (
               <EmptyState
                 title={missed.length === 0 ? "No missed calls" : "No missed calls match your search"}
-                hint={missed.length === 0 ? "Calls that don't connect (busy, no answer, or rejected) will appear here." : "Try a different search."}
+                hint={missed.length === 0 ? "Calls that hit voicemail, went unanswered, or failed on the platform side will appear here." : "Try a different search."}
               />
             ) : (
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>

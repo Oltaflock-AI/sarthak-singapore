@@ -1,6 +1,7 @@
 "use client";
 
 import { useEffect, useRef, useState } from "react";
+import type { Reach } from "./callClass";
 
 // Poll on an interval AND the moment the tab comes back to the foreground, so a
 // dashboard left open on a second monitor / background tab never shows numbers
@@ -50,6 +51,9 @@ export interface CallRow {
   analysis: Record<string, unknown> | null;
   transcript: { speaker: string; time: string; text: string; side: string }[] | null;
   created_at: string;
+  // Server-derived on the list routes (see /api/calls): how far the call got.
+  // Absent on the single-call read, where the transcript is present instead.
+  reach?: Reach;
 }
 
 // ── Shared live-data hook (polls every 10s) ─────────────────────────────────
@@ -94,6 +98,9 @@ export async function fetchCallsByPhone(phone: string): Promise<CallRow[]> {
 // call_initiation_failure path flags it, and it has no transcript and 0 duration.
 // These are kept out of the main Voice Calls list and shown under their own tab.
 export function isMissedCall(c: CallRow): boolean {
+  // `reach` is the accurate signal: it accounts for voicemail pickups and calls
+  // where nobody ever spoke, which the old duration check counted as answered.
+  if (c.reach) return c.reach !== "conversation";
   const a = (c.analysis ?? {}) as Record<string, unknown>;
   if (a.call_initiation_failure === true) return true;
   const noTranscript = !c.transcript || c.transcript.length === 0;
@@ -102,6 +109,9 @@ export function isMissedCall(c: CallRow): boolean {
 
 // Human-readable reason a call didn't connect, from the stored outcome.
 export function missedReason(c: CallRow): string {
+  if (c.reach === "voicemail") return "Voicemail / machine picked up";
+  if (c.reach === "agent_failure") return "Agent couldn't run the call (platform error)";
+  if (c.reach === "no_answer" && (c.duration_seconds ?? 0) > 0) return "Answered but nobody spoke";
   const o = (c.outcome ?? "").toLowerCase();
   if (o.includes("busy")) return "Busy";
   if (o.includes("no-answer") || o.includes("no_answer") || o.includes("no answer")) return "No answer";
