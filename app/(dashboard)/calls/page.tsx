@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 
 const FILTERS = ["All", "Hot", "Warm", "Cold"] as const;
 type Filter = typeof FILTERS[number];
-type View = "connected" | "missed";
+type View = "connected" | "insightful" | "booked" | "missed";
 
 export default function CallsPage() {
   const { calls, loading } = useLiveData();
@@ -55,6 +55,20 @@ export default function CallsPage() {
   const connected = useMemo(() => calls.filter((c) => !isMissedCall(c)), [calls]);
   const missed = useMemo(() => calls.filter((c) => isMissedCall(c)), [calls]);
 
+  // Conversations that ran past a minute — long enough to carry real signal.
+  const insightful = useMemo(
+    () => connected.filter((c) => (c.duration_seconds ?? 0) > 60),
+    [connected],
+  );
+  // Calls where the agent actually closed a site visit.
+  const booked = useMemo(
+    () =>
+      connected.filter(
+        (c) => ((c.analysis ?? {}) as Record<string, unknown>).site_visit_booked === true,
+      ),
+    [connected],
+  );
+
   const matchesSearch = (c: (typeof calls)[number]) => {
     if (!search) return true;
     const q = search.toLowerCase();
@@ -66,15 +80,17 @@ export default function CallsPage() {
     );
   };
 
+  const base = view === "insightful" ? insightful : view === "booked" ? booked : connected;
+
   const filtered = useMemo(() => {
-    return connected.filter((c) => {
+    return base.filter((c) => {
       const score = c.lead_score ?? 0;
       if (filter === "Hot" && score < 80) return false;
       if (filter === "Warm" && (score < 60 || score >= 80)) return false;
       if (filter === "Cold" && score >= 60) return false;
       return matchesSearch(c);
     });
-  }, [connected, filter, search]);
+  }, [base, filter, search]);
 
   const filteredMissed = useMemo(() => missed.filter(matchesSearch), [missed, search]);
 
@@ -83,9 +99,13 @@ export default function CallsPage() {
       <PageHeader
         title="Voice Calls"
         subtitle={
-          view === "connected"
-            ? `${connected.length} ${connected.length === 1 ? "call" : "calls"} · click any card to expand the transcript`
-            : `${missed.length} ${missed.length === 1 ? "call" : "calls"} that didn't connect (busy, no answer, or rejected)`
+          view === "missed"
+            ? `${missed.length} ${missed.length === 1 ? "call" : "calls"} that didn't connect (busy, no answer, or rejected)`
+            : view === "insightful"
+            ? `${insightful.length} ${insightful.length === 1 ? "conversation" : "conversations"} that ran longer than a minute`
+            : view === "booked"
+            ? `${booked.length} ${booked.length === 1 ? "call" : "calls"} where the lead booked a site visit`
+            : `${connected.length} ${connected.length === 1 ? "call" : "calls"} · click any card to expand the transcript`
         }
       />
 
@@ -100,7 +120,7 @@ export default function CallsPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 20px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
           {/* Connected vs. not-picked-up — keeps missed calls out of the main list */}
           <div style={{ display: "inline-flex", gap: 3, background: "var(--bg-2)", border: "1px solid var(--line)", borderRadius: 9, padding: 3 }}>
-            {([["connected", "Calls", connected.length], ["missed", "Not picked up", missed.length]] as const).map(([key, label, n]) => (
+            {([["connected", "Calls", connected.length], ["insightful", "Insightful conversations", insightful.length], ["booked", "Site visits booked", booked.length], ["missed", "Not picked up", missed.length]] as const).map(([key, label, n]) => (
               <button
                 key={key}
                 onClick={() => setView(key)}
@@ -146,7 +166,7 @@ export default function CallsPage() {
             onFocus={(e) => (e.currentTarget.style.borderColor = "var(--gold-dim)")}
             onBlur={(e) => (e.currentTarget.style.borderColor = "var(--line)")}
           />
-          {view === "connected" && (
+          {view !== "missed" && (
             <div style={{ display: "flex", gap: 4, marginLeft: "auto" }}>
               {FILTERS.map((f) => (
                 <button
@@ -190,8 +210,24 @@ export default function CallsPage() {
             )
           ) : filtered.length === 0 ? (
             <EmptyState
-              title={connected.length === 0 ? "No calls yet" : "No calls match your filter"}
-              hint={connected.length === 0 ? "Place a test call through the ElevenLabs voice agent to see it appear here." : "Try removing the filter or adjusting your search."}
+              title={
+                base.length === 0
+                  ? view === "insightful"
+                    ? "No conversations over a minute yet"
+                    : view === "booked"
+                    ? "No site visits booked yet"
+                    : "No calls yet"
+                  : "No calls match your filter"
+              }
+              hint={
+                base.length === 0
+                  ? view === "insightful"
+                    ? "Calls that run longer than 60 seconds will appear here."
+                    : view === "booked"
+                    ? "Calls where the agent locks in a site visit will appear here."
+                    : "Place a test call through the ElevenLabs voice agent to see it appear here."
+                  : "Try removing the filter or adjusting your search."
+              }
             />
           ) : (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
