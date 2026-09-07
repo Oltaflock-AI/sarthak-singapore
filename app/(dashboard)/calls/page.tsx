@@ -1,7 +1,7 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import { useLiveData, isMissedCall } from "@/lib/data";
+import { useLiveData, useAutoRefresh, isMissedCall } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { CallCard } from "@/components/CallCard";
 import { MissedCallCard } from "@/components/MissedCallCard";
@@ -17,21 +17,35 @@ export default function CallsPage() {
   const [filter, setFilter] = useState<Filter>("All");
   const [search, setSearch] = useState("");
   const [enriching, setEnriching] = useState<Set<string>>(new Set());
+  // Booking truth lives in the site_visits table (written by the ElevenLabs
+  // webhook straight from the cal.com result). analysis.site_visit_booked is
+  // only set by the enrich route and is absent on every real booked call, so
+  // keying the tab off that flag showed an empty list.
+  const [bookedCallIds, setBookedCallIds] = useState<Set<string>>(new Set());
   const enrichedRef = useRef<Set<string>>(new Set());
 
-  // Auto-enrich when a call lacks a score OR lacks the deep sentiment/motivation
-  // blob. Ringg sets a heuristic lead_score, so the score-null check alone never
-  // fires for real calls — gate on missing analysis.sentiment too.
+  // Auto-enrich calls that still lack the deep sentiment/motivation blob.
+  // Gate on a real connected conversation, NOT on `c.transcript`: the /api/calls
+  // list payload deliberately drops the heavy transcript column, so the old
+  // transcript check was false for every call and enrichment never once ran.
+  // The server reads the transcript itself and 400s if there is none.
   useEffect(() => {
-    for (const c of calls) {
+    const pending = calls.filter((c) => {
       const an = (c.analysis ?? {}) as Record<string, unknown>;
       const needsDeep = !an.sentiment || !an.motivation;
-      if (
-        (c.lead_score == null || needsDeep) &&
-        Array.isArray(c.transcript) &&
-        c.transcript.length > 0 &&
+      return (
+        needsDeep &&
+        !isMissedCall(c) &&
+        (c.duration_seconds ?? 0) > 0 &&
         !enrichedRef.current.has(c.id)
-      ) {
+      );
+    });
+    // Longest conversations first — the ones whose psychology read matters —
+    // and only a few at a time so a backlog doesn't fire 100 parallel requests.
+    pending
+      .sort((a, b) => (b.duration_seconds ?? 0) - (a.duration_seconds ?? 0))
+      .slice(0, 3)
+      .forEach((c) => {
         enrichedRef.current.add(c.id);
         setEnriching((s) => new Set(s).add(c.id));
         fetch("/api/calls/enrich", {
@@ -47,9 +61,22 @@ export default function CallsPage() {
               return next;
             });
           });
-      }
-    }
+      });
   }, [calls]);
+
+  useAutoRefresh(async () => {
+    try {
+      const res = await fetch("/api/site-visits");
+      if (!res.ok) return;
+      const rows = (await res.json()) as { call_id: string | null }[];
+      if (!Array.isArray(rows)) return;
+      setBookedCallIds(
+        new Set(rows.map((r) => r.call_id).filter((v): v is string => Boolean(v))),
+      );
+    } catch {
+      /* keep the last known set */
+    }
+  }, 30000);
 
   // Connected conversations vs. calls that never connected (not picked up).
   const connected = useMemo(() => calls.filter((c) => !isMissedCall(c)), [calls]);
@@ -60,13 +87,16 @@ export default function CallsPage() {
     () => connected.filter((c) => (c.duration_seconds ?? 0) > 60),
     [connected],
   );
-  // Calls where the agent actually closed a site visit.
+  // Calls where the agent actually closed a site visit — a row in site_visits,
+  // or (legacy/enriched calls) the analysis flag.
   const booked = useMemo(
     () =>
       connected.filter(
-        (c) => ((c.analysis ?? {}) as Record<string, unknown>).site_visit_booked === true,
+        (c) =>
+          bookedCallIds.has(String(c.call_id ?? c.id)) ||
+          ((c.analysis ?? {}) as Record<string, unknown>).site_visit_booked === true,
       ),
-    [connected],
+    [connected, bookedCallIds],
   );
 
   const matchesSearch = (c: (typeof calls)[number]) => {
