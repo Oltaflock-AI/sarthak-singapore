@@ -45,7 +45,8 @@ async function run(limit: number, force: boolean) {
   const candidates = (data ?? [])
     .filter((c) => {
       const a = (c.analysis ?? {}) as Record<string, unknown>;
-      const needsDeep = !a.sentiment || !a.motivation;
+      // no_conversation = already inspected, the lead never spoke. Not pending.
+      const needsDeep = !a.no_conversation && (!a.sentiment || !a.motivation);
       // Nothing to read on a call that never connected.
       const connected = (c.duration_seconds ?? 0) > 0;
       return connected && (force || needsDeep);

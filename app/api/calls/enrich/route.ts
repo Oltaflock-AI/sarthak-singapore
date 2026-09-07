@@ -20,9 +20,12 @@ export async function GET() {
     .order("created_at", { ascending: false })
     .limit(1000);
   if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+  // Only count what the backfill would actually pick up: a call that never
+  // connected has nothing to analyse and is not "pending" in any real sense.
   const pending = (data ?? []).filter((c) => {
     const a = (c.analysis ?? {}) as Record<string, unknown>;
-    return !a.sentiment || !a.motivation;
+    if ((c.duration_seconds ?? 0) === 0) return false;
+    return !a.no_conversation && (!a.sentiment || !a.motivation);
   });
   return NextResponse.json({
     pending_count: pending.length,

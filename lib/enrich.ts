@@ -114,7 +114,24 @@ export async function enrichCall(key: { id?: string; call_id?: string }): Promis
   }
 
   const turns = (call.transcript ?? []) as Turn[];
-  if (!turns.length) return { ok: false, status: 400, error: "no transcript to analyse" };
+
+  // The agent talking into silence (instant hangup, voicemail) is most of the
+  // call log. There is no buyer psychology to read there, so spending an LLM
+  // call on it buys nothing — mark it and never look at it again, otherwise the
+  // cron re-picks these forever and burns credits on dead air.
+  const userTurns = turns.filter(
+    (t) => !/agent|assistant|bot/i.test(String(t.speaker ?? "")),
+  ).length;
+  // Same for a connected call that carries no transcript at all — without the
+  // marker the cron would re-pick it every 10 minutes, forever.
+  if (userTurns === 0 || !turns.length) {
+    const prev = (call.analysis ?? {}) as Record<string, unknown>;
+    await supabase
+      .from("calls")
+      .update({ analysis: { ...prev, no_conversation: true } })
+      .eq("id", call.id);
+    return { ok: true, status: 200, call: { id: call.id, skipped: turns.length ? "lead never spoke" : "no transcript" } };
+  }
 
   const transcriptText = turns
     .map((t) => `${(t.speaker ?? "speaker").toUpperCase()}: ${t.text ?? ""}`)
