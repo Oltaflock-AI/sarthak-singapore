@@ -1,7 +1,7 @@
 "use client";
 
-import { useEffect, useMemo, useRef, useState } from "react";
-import { useLiveData, useAutoRefresh, isMissedCall } from "@/lib/data";
+import { useMemo, useState } from "react";
+import { useLiveData, useAutoRefresh, isMissedCall, type CallRow } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { CallCard } from "@/components/CallCard";
 import { MissedCallCard } from "@/components/MissedCallCard";
@@ -16,53 +16,20 @@ export default function CallsPage() {
   const [view, setView] = useState<View>("connected");
   const [filter, setFilter] = useState<Filter>("All");
   const [search, setSearch] = useState("");
-  const [enriching, setEnriching] = useState<Set<string>>(new Set());
   // Booking truth lives in the site_visits table (written by the ElevenLabs
   // webhook straight from the cal.com result). analysis.site_visit_booked is
   // only set by the enrich route and is absent on every real booked call, so
   // keying the tab off that flag showed an empty list.
   const [bookedCallIds, setBookedCallIds] = useState<Set<string>>(new Set());
-  const enrichedRef = useRef<Set<string>>(new Set());
+  // Booked calls that fall outside the 500-row list window are fetched by id so
+  // the tab shows every booking, not just the recent ones.
+  const [extraBooked, setExtraBooked] = useState<CallRow[]>([]);
 
-  // Auto-enrich calls that still lack the deep sentiment/motivation blob.
-  // Gate on a real connected conversation, NOT on `c.transcript`: the /api/calls
-  // list payload deliberately drops the heavy transcript column, so the old
-  // transcript check was false for every call and enrichment never once ran.
-  // The server reads the transcript itself and 400s if there is none.
-  useEffect(() => {
-    const pending = calls.filter((c) => {
-      const an = (c.analysis ?? {}) as Record<string, unknown>;
-      const needsDeep = !an.sentiment || !an.motivation;
-      return (
-        needsDeep &&
-        !isMissedCall(c) &&
-        (c.duration_seconds ?? 0) > 0 &&
-        !enrichedRef.current.has(c.id)
-      );
-    });
-    // Longest conversations first — the ones whose psychology read matters —
-    // and only a few at a time so a backlog doesn't fire 100 parallel requests.
-    pending
-      .sort((a, b) => (b.duration_seconds ?? 0) - (a.duration_seconds ?? 0))
-      .slice(0, 3)
-      .forEach((c) => {
-        enrichedRef.current.add(c.id);
-        setEnriching((s) => new Set(s).add(c.id));
-        fetch("/api/calls/enrich", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ id: c.id }),
-        })
-          .catch(() => {})
-          .finally(() => {
-            setEnriching((s) => {
-              const next = new Set(s);
-              next.delete(c.id);
-              return next;
-            });
-          });
-      });
-  }, [calls]);
+  // No client-side enrichment. The browser used to fire /api/calls/enrich for
+  // any call missing the deep analysis, which meant an un-enriched backlog
+  // retried forever on every 10s poll — the "AI analysing…" banner never
+  // cleared, and a dead API key turned it into an endless 500 loop.
+  // Enrichment is now a server job: /api/calls/enrich/backfill, on a cron.
 
   useAutoRefresh(async () => {
     try {
@@ -70,9 +37,15 @@ export default function CallsPage() {
       if (!res.ok) return;
       const rows = (await res.json()) as { call_id: string | null }[];
       if (!Array.isArray(rows)) return;
-      setBookedCallIds(
-        new Set(rows.map((r) => r.call_id).filter((v): v is string => Boolean(v))),
-      );
+      const ids = rows.map((r) => r.call_id).filter((v): v is string => Boolean(v));
+      setBookedCallIds(new Set(ids));
+      if (ids.length) {
+        const cRes = await fetch(`/api/calls?ids=${encodeURIComponent(ids.join(","))}`, { cache: "no-store" });
+        if (cRes.ok) {
+          const cJson = await cRes.json().catch(() => ({}));
+          setExtraBooked((cJson.calls as CallRow[]) ?? []);
+        }
+      }
     } catch {
       /* keep the last known set */
     }
@@ -89,15 +62,18 @@ export default function CallsPage() {
   );
   // Calls where the agent actually closed a site visit — a row in site_visits,
   // or (legacy/enriched calls) the analysis flag.
-  const booked = useMemo(
-    () =>
-      connected.filter(
-        (c) =>
-          bookedCallIds.has(String(c.call_id ?? c.id)) ||
-          ((c.analysis ?? {}) as Record<string, unknown>).site_visit_booked === true,
-      ),
-    [connected, bookedCallIds],
-  );
+  const booked = useMemo(() => {
+    const inWindow = connected.filter(
+      (c) =>
+        bookedCallIds.has(String(c.call_id ?? c.id)) ||
+        ((c.analysis ?? {}) as Record<string, unknown>).site_visit_booked === true,
+    );
+    const seen = new Set(inWindow.map((c) => c.id));
+    const merged = [...inWindow, ...extraBooked.filter((c) => !seen.has(c.id))];
+    return merged.sort(
+      (a, b) => Date.parse(b.created_at) - Date.parse(a.created_at),
+    );
+  }, [connected, bookedCallIds, extraBooked]);
 
   const matchesSearch = (c: (typeof calls)[number]) => {
     if (!search) return true;
@@ -138,13 +114,6 @@ export default function CallsPage() {
             : `${connected.length} ${connected.length === 1 ? "call" : "calls"} · click any card to expand the transcript`
         }
       />
-
-      {enriching.size > 0 && (
-        <div style={{ marginBottom: 14, padding: "10px 16px", background: "var(--gold-soft)", border: "1px solid var(--gold-dim)", borderRadius: 6, fontSize: 12, color: "var(--gold-2)", display: "flex", alignItems: "center", gap: 10 }}>
-          <span className="pulse-dot" style={{ width: 8, height: 8, borderRadius: 8, background: "var(--gold)", animation: "pulse 1s ease-in-out infinite" }} />
-          AI analysing {enriching.size} {enriching.size === 1 ? "call" : "calls"}… score, summary, project will populate within a few seconds.
-        </div>
-      )}
 
       <div className="panel">
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 20px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>

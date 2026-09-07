@@ -14,11 +14,26 @@ export async function GET(req: NextRequest) {
   const { searchParams } = req.nextUrl;
   const id = searchParams.get("id");
   const phone = searchParams.get("phone");
+  const ids = searchParams.get("ids");
 
   if (id) {
     const { data, error } = await supabase.from("calls").select("*").eq("id", id).maybeSingle();
     if (error) return NextResponse.json({ error: error.message }, { status: 500 });
     return NextResponse.json({ call: data });
+  }
+
+  // Explicit call_id lookup — used by the Site visits booked tab, whose rows can
+  // be older than the 500-row list window below and would otherwise vanish.
+  if (ids) {
+    const list = ids.split(",").map((v) => v.trim()).filter(Boolean).slice(0, 200);
+    if (list.length === 0) return NextResponse.json({ calls: [] });
+    const { data, error } = await supabase
+      .from("calls")
+      .select("id,call_id,lead_name,lead_phone,project,source,lead_score,score_label,duration_seconds,outcome,summary,language,analysis,created_at")
+      .in("call_id", list)
+      .order("created_at", { ascending: false });
+    if (error) return NextResponse.json({ error: error.message }, { status: 500 });
+    return NextResponse.json({ calls: data ?? [] });
   }
 
   if (phone) {
