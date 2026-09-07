@@ -107,6 +107,18 @@ export function isMissedCall(c: CallRow): boolean {
   return (c.duration_seconds ?? 0) === 0 && noTranscript;
 }
 
+// Did the agent actually hand this call to a human? Three signals, strongest
+// first: the webhook's own `transferred` flag (from ElevenLabs
+// features_usage.transfer_to_number, authoritative), a carrier termination that
+// says the call left for another number, and the WhatsApp handoff brief having
+// been sent to the sales team — which the webhook only does on a real transfer.
+export function isTransferred(c: CallRow): boolean {
+  const a = (c.analysis ?? {}) as Record<string, unknown>;
+  if (a.transferred === true) return true;
+  if (/transfer/i.test(String(a.termination_reason ?? ""))) return true;
+  return a.handoff_sent === true;
+}
+
 // Human-readable reason a call didn't connect, from the stored outcome.
 export function missedReason(c: CallRow): string {
   if (c.reach === "voicemail") return "Voicemail / machine picked up";

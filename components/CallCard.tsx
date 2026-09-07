@@ -1,7 +1,7 @@
 "use client";
 
 import Link from "next/link";
-import { CallRow } from "@/lib/data";
+import { CallRow, isTransferred } from "@/lib/data";
 import { ScoreBadge } from "./ScoreBadge";
 import { fmtDuration, fmtDateTime } from "@/lib/format";
 
@@ -57,6 +57,10 @@ export function CallCard({ call }: Props) {
   const budget = get("budget_range");
   const timeline = get("timeline");
   const siteVisit = a["site_visit_booked"] === true;
+  // Handed to a live salesperson — worth spotting from the list, not just the
+  // dedicated tab, since these leads already have human context.
+  const transferred = isTransferred(call);
+  const transferWhy = typeof a["transfer_reason"] === "string" ? (a["transfer_reason"] as string) : null;
   // Prefer the deep AI sentiment from enrichment; fall back to keyword heuristic.
   const aiSent = a["sentiment"] as { overall?: string } | null | undefined;
   const sentiment = aiSent?.overall
@@ -130,7 +134,7 @@ export function CallCard({ call }: Props) {
         display: "grid",
         gridTemplateColumns: "repeat(auto-fit, minmax(110px, 1fr))",
         gap: 8,
-        marginBottom: chipsExist(intent, budget, timeline, siteVisit) ? 12 : 0,
+        marginBottom: chipsExist(intent, budget, timeline, siteVisit, transferred) ? 12 : 0,
       }}>
         <MiniStat label="Score" value={score > 0 ? `${score}` : "—"} accent={scoreColor} />
         <MiniStat label="Status" value={(call.score_label ?? "—").toUpperCase()} accent={scoreColor} />
@@ -154,11 +158,20 @@ export function CallCard({ call }: Props) {
       </div>
 
       {/* Qualification chips */}
-      {(intent || budget || timeline || siteVisit) && (
+      {(intent || budget || timeline || siteVisit || transferred) && (
         <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
           {intent && <Chip label="Intent" value={humanize(intent)} />}
           {budget && <Chip label="Budget" value={humanizeBudget(budget)} accent="#c9a85a" />}
           {timeline && <Chip label="Timeline" value={humanize(timeline)} />}
+          {transferred && (
+            <span style={{
+              fontSize: 10.5, padding: "3px 9px", borderRadius: 999,
+              background: "rgba(122,154,199,0.12)", color: "#7a9ac7",
+              border: "1px solid rgba(122,154,199,0.3)", fontWeight: 600,
+            }}>
+              ☎ Transferred to human{transferWhy ? ` · ${transferWhy}` : ""}
+            </span>
+          )}
           {siteVisit && (
             <span style={{
               fontSize: 10.5, padding: "3px 9px", borderRadius: 999,

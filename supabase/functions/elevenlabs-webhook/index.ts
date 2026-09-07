@@ -585,6 +585,11 @@ Deno.serve(async (req) => {
     // Booking facts belong on the call row too — the dashboard's "Site visits
     // booked" view reads analysis.site_visit_booked, and without this it stayed
     // empty even when site_visits had the row.
+    // Whether the call was actually handed to a human, and why. The dashboard's
+    // "Transferred to human" filter reads this; before it existed the only trace
+    // was the WhatsApp sent-flag, which is a side effect, not the fact.
+    transferred: transferred || priorAnalysis.transferred === true,
+    transfer_reason: transferred ? transferReason(transcript) : (priorAnalysis.transfer_reason ?? undefined),
     site_visit_booked: siteVisit || priorAnalysis.site_visit_booked === true,
     site_visit_datetime: visitWhenIso ?? priorAnalysis.site_visit_datetime ?? null,
     // Deep enrichment written by /api/calls/enrich — preserved across retries.

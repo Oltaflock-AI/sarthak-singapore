@@ -1,7 +1,7 @@
 "use client";
 
 import { useMemo, useState } from "react";
-import { useLiveData, useAutoRefresh, isMissedCall, type CallRow } from "@/lib/data";
+import { useLiveData, useAutoRefresh, isMissedCall, isTransferred, type CallRow } from "@/lib/data";
 import { PageHeader } from "@/components/PageHeader";
 import { CallCard } from "@/components/CallCard";
 import { MissedCallCard } from "@/components/MissedCallCard";
@@ -9,7 +9,7 @@ import { EmptyState } from "@/components/EmptyState";
 
 const FILTERS = ["All", "Hot", "Warm", "Cold"] as const;
 type Filter = typeof FILTERS[number];
-type View = "connected" | "insightful" | "booked" | "missed";
+type View = "connected" | "insightful" | "transferred" | "booked" | "missed";
 
 export default function CallsPage() {
   const { calls, loading } = useLiveData();
@@ -68,6 +68,10 @@ export default function CallsPage() {
       }),
     [connected],
   );
+  // Calls the agent actually handed to a live salesperson. These are the ones a
+  // human already spoke to, so they read differently from a pure AI conversation.
+  const transferred = useMemo(() => connected.filter(isTransferred), [connected]);
+
   // Calls where the agent actually closed a site visit — a row in site_visits,
   // or (legacy/enriched calls) the analysis flag.
   const booked = useMemo(() => {
@@ -94,7 +98,11 @@ export default function CallsPage() {
     );
   };
 
-  const base = view === "insightful" ? insightful : view === "booked" ? booked : connected;
+  const base =
+    view === "insightful" ? insightful
+    : view === "transferred" ? transferred
+    : view === "booked" ? booked
+    : connected;
 
   const filtered = useMemo(() => {
     return base.filter((c) => {
@@ -117,6 +125,8 @@ export default function CallsPage() {
             ? `${missed.length} ${missed.length === 1 ? "call" : "calls"} that never became a conversation — voicemail, no answer, or a platform error`
             : view === "insightful"
             ? `${insightful.length} ${insightful.length === 1 ? "conversation" : "conversations"} that ran longer than a minute`
+            : view === "transferred"
+            ? `${transferred.length} ${transferred.length === 1 ? "call" : "calls"} the agent handed to a live salesperson`
             : view === "booked"
             ? `${booked.length} ${booked.length === 1 ? "call" : "calls"} where the lead booked a site visit`
             : `${connected.length} ${connected.length === 1 ? "call" : "calls"} · click any card to expand the transcript`
@@ -127,7 +137,7 @@ export default function CallsPage() {
         <div style={{ display: "flex", alignItems: "center", gap: 12, padding: "14px 20px", borderBottom: "1px solid var(--line)", flexWrap: "wrap" }}>
           {/* Connected vs. not-picked-up — keeps missed calls out of the main list */}
           <div style={{ display: "inline-flex", gap: 3, background: "var(--bg-2)", border: "1px solid var(--line)", borderRadius: 9, padding: 3 }}>
-            {([["connected", "Calls", connected.length], ["insightful", "Insightful conversations", insightful.length], ["booked", "Site visits booked", booked.length], ["missed", "Not picked up", missed.length]] as const).map(([key, label, n]) => (
+            {([["connected", "Calls", connected.length], ["insightful", "Insightful conversations", insightful.length], ["transferred", "Transferred to human", transferred.length], ["booked", "Site visits booked", booked.length], ["missed", "Not picked up", missed.length]] as const).map(([key, label, n]) => (
               <button
                 key={key}
                 onClick={() => setView(key)}
@@ -221,6 +231,8 @@ export default function CallsPage() {
                 base.length === 0
                   ? view === "insightful"
                     ? "No conversations over a minute yet"
+                    : view === "transferred"
+                    ? "No calls transferred to a human yet"
                     : view === "booked"
                     ? "No site visits booked yet"
                     : "No calls yet"
@@ -230,6 +242,8 @@ export default function CallsPage() {
                 base.length === 0
                   ? view === "insightful"
                     ? "Calls that run longer than 60 seconds will appear here."
+                    : view === "transferred"
+                    ? "Calls the agent hands off to a live salesperson will appear here."
                     : view === "booked"
                     ? "Calls where the agent locks in a site visit will appear here."
                     : "Place a test call through the ElevenLabs voice agent to see it appear here."
